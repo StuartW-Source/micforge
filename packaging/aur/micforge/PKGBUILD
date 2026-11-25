@@ -1,4 +1,4 @@
-# Maintainer: stuartw-source <YOUR-EMAIL-HERE>
+# Maintainer: stuartw-source <stuartpaulwebb@gmail.com>
 #
 # Release package: builds the tagged GitHub release v$pkgver.
 # After tagging a new release: bump pkgver, run `updpkgsums`, then `makepkg --printsrcinfo > .SRCINFO`.
