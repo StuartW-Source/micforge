@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.stuartw_source.micforge</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>MicForge</name>
+  <summary>Microphone processor that sends only your voice</summary>
+  <description>
+    <p>
+      MicForge cleans up your microphone for voice chat, streaming and recording on PipeWire.
+      It creates a virtual microphone that you select in Discord, OBS or any other app.
+    </p>
+    <ul>
+      <li>Guided setup that tunes everything to your voice, mic and room</li>
+      <li>Voice gate that keeps other people in the room off your mic, even when they're loud</li>
+      <li>AI noise removal, compressor, auto level, de-esser, equaliser, reverb, echo and more</li>
+      <li>Voice changer with presets such as Robot, Chipmunk, Monster and Old Radio</li>
+      <li>Load your own VST3 and LV2 plugins</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">micforge.desktop</launchable>
+  <url type="homepage">https://github.com/stuartw-source/micforge</url>
+  <url type="bugtracker">https://github.com/stuartw-source/micforge/issues</url>
+  <developer id="io.github.stuartw_source">
+    <name>stuartw-source</name>
+  </developer>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-25">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

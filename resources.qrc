@@ -1,0 +1,46 @@
+<RCC>
+  <qresource prefix="/">
+    <file>qml/ChainTile.qml</file>
+    <file>qml/ClosenessBar.qml</file>
+    <file>qml/EffectLibrary.qml</file>
+    <file>qml/EqGraph.qml</file>
+    <file>qml/HelpButton.qml</file>
+    <file>qml/LevelMeter.qml</file>
+    <file>qml/Main.qml</file>
+    <file>qml/ParamSlider.qml</file>
+    <file>qml/PillButton.qml</file>
+    <file>qml/PlacementDiagram.qml</file>
+    <file>qml/PluginBrowser.qml</file>
+    <file>qml/PluginParamControl.qml</file>
+    <file>qml/PresetChips.qml</file>
+    <file>qml/qmldir</file>
+    <file>qml/ReductionMeter.qml</file>
+    <file>qml/ResponseCurve.qml</file>
+    <file>qml/Segmented.qml</file>
+    <file>qml/SettingsDialog.qml</file>
+    <file>qml/StageAutoLevel.qml</file>
+    <file>qml/StageComp.qml</file>
+    <file>qml/StageDeess.qml</file>
+    <file>qml/StageDoubler.qml</file>
+    <file>qml/StageEcho.qml</file>
+    <file>qml/StageEq.qml</file>
+    <file>qml/StageExciter.qml</file>
+    <file>qml/StageGate.qml</file>
+    <file>qml/StageInput.qml</file>
+    <file>qml/StageLowCut.qml</file>
+    <file>qml/StageNoise.qml</file>
+    <file>qml/StageOutput.qml</file>
+    <file>qml/StagePanel.qml</file>
+    <file>qml/StagePlugins.qml</file>
+    <file>qml/StageReverb.qml</file>
+    <file>qml/StageTone.qml</file>
+    <file>qml/StageVoice.qml</file>
+    <file>qml/StageWarmth.qml</file>
+    <file>qml/Theme.qml</file>
+    <file>qml/ToggleSwitch.qml</file>
+    <file>qml/ToolTipLite.qml</file>
+    <file>qml/VoiceSetup.qml</file>
+    <file>qml/ZoneBar.qml</file>
+    <file>icons/micforge.svg</file>
+  </qresource>
+</RCC>

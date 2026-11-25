@@ -1,0 +1,777 @@
+#include "controller.h"
+
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QProcess>
+#include <QSettings>
+#include <QStandardPaths>
+#include <QtConcurrent/QtConcurrentRun>
+
+#include <cstring>
+
+#include <algorithm>
+#include <cmath>
+
+using namespace mf;
+
+namespace {
+
+struct BuiltinPreset {
+    const char *name;
+    QVariantMap values; // overrides on top of defaults
+};
+
+const QList<BuiltinPreset> &builtinPresets() {
+    static const QList<BuiltinPreset> list = {
+        {"Voice chat", {}},
+        {"Gentle / natural",
+         {{"gateMode", 1}, {"gateRatio", 2.5}, {"gateRange", -25}, {"gateRelease", 400}, {"compRatio", 2},
+          {"compThreshold", -20}, {"compMakeup", 3}}},
+        {"Shared room (strict)",
+         {{"gateRange", -60}, {"gateHold", 120}, {"gateRelease", 180}, {"gateLookahead", 5}, {"compRatio", 4}}},
+        {"Broadcast / radio",
+         {{"lowCutFreq", 90}, {"compRatio", 5}, {"compThreshold", -28}, {"compMakeup", 9}, {"compAttack", 5},
+          {"toneBass", 2}, {"tonePresence", 2.5}, {"toneAir", 1.5}}},
+    };
+    return list;
+}
+
+// Settings that belong to this mic/room, not to a sound style. Built-in presets never touch them,
+// so loading a preset doesn't undo the voice-separation setup or remove added effects.
+bool isPersonalKey(const QString &k) {
+    static const QStringList keys = {"inputChannel", "inputGain", "gateThreshold", "gateHysteresis",
+                                     "gateFocus", "gateScLow", "gateScHigh", "gateCloseCheck", "gateTilt", "gateTiltDir",
+                                     "micType", "needOthers", "needNoise", "needBroadcast", "bypass"};
+    return keys.contains(k) || k.endsWith("Added");
+}
+
+double roundHalf(double v) { return std::round(v * 2.0) / 2.0; }
+
+QString autostartPath() {
+    return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + "/autostart/micforge.desktop";
+}
+
+// Ask PipeWire-Pulse which mic is the system default (used on first run only).
+QString systemDefaultSource() {
+    QProcess p;
+    p.start("pactl", {"get-default-source"});
+    if (!p.waitForFinished(1500)) return {};
+    return QString::fromUtf8(p.readAllStandardOutput()).trimmed();
+}
+
+constexpr int kCalibVersion = 2; // bump when the analysis changes in a way that should re-tune saved setups
+
+QString fmtHz(double v) { return v >= 1000 ? QString::number(v / 1000, 'f', 1) + " kHz" : QString::number(v, 'f', 0) + " Hz"; }
+
+} // namespace
+
+Controller::Controller(QObject *parent) : QObject(parent) {
+    QSettings s;
+    for (int i = 0; i < PARAM_COUNT; ++i) {
+        const double v = s.value(QString("params/") + kParams[i].key, kParams[i].def).toDouble();
+        m_params.insert(kParams[i].key, v);
+        m_engine.params.set(i, float(v));
+    }
+    m_engine.params.set(Bypass, 0); // never start bypassed
+    m_params.insert("bypass", 0);
+    m_currentSource = s.value("source").toString();
+    m_currentPreset = s.value("preset", builtinPresets().first().name).toString();
+    if (m_currentPreset == QStringLiteral("SM57 · Voice chat")) m_currentPreset = builtinPresets().first().name;
+    m_showWelcome = s.value("showWelcome", true).toBool();
+
+    connect(&m_params, &QQmlPropertyMap::valueChanged, this, &Controller::onParamEdited);
+
+    m_engine.onSourcesChanged = [this](std::vector<SourceInfo> list) {
+        QMetaObject::invokeMethod(this, [this, list] { updateSources(list); }, Qt::QueuedConnection);
+    };
+    m_engine.onStateChanged = [this] {
+        QMetaObject::invokeMethod(this, [this] { emit statusChanged(); }, Qt::QueuedConnection);
+    };
+
+    if (m_currentSource.isEmpty()) {
+        const QString def = systemDefaultSource();
+        if (!def.isEmpty() && !def.startsWith("micforge") && !def.contains("easyeffects"))
+            m_currentSource = def;
+    }
+    m_engine.setCaptureTarget(m_currentSource.toStdString());
+    m_engineOk = m_engine.start();
+
+    // Third-party plugins: restore the saved chain now, discover what's installed in the background.
+    m_plugins = new PluginManager(&m_engine.rack, AudioEngine::kRate, this);
+    m_plugins->restore();
+    QTimer::singleShot(1200, m_plugins, [this] { m_plugins->rescan(); });
+
+    if (autostart() && !qEnvironmentVariableIsSet("MICFORGE_TEST")) writeAutostartEntry();
+
+    m_meterTimer.setInterval(33);
+    connect(&m_meterTimer, &QTimer::timeout, this, &Controller::pollMeters);
+    m_meterTimer.start();
+
+    // The voice-separation analysis improved since these recordings were tuned: re-tune once.
+    if (hasRecordings() && QSettings().value("calib/version", 1).toInt() < kCalibVersion)
+        QTimer::singleShot(1500, this, &Controller::retuneFromRecordings);
+
+    m_saveTimer.setSingleShot(true);
+    m_saveTimer.setInterval(600);
+    connect(&m_saveTimer, &QTimer::timeout, this, &Controller::saveNow);
+
+    connect(&m_analysis, &QFutureWatcher<SeparationResult>::finished, this,
+            [this] { applyAnalysis(m_analysis.result()); });
+
+    // Development aid: show an example result page (for screenshots of the UI without recording).
+    if (qEnvironmentVariableIsSet("MICFORGE_DEMO_RESULT")) {
+        auto step = [](const char *id, const char *label, const char *status, const char *note) {
+            return QVariantMap{{"id", id}, {"label", label}, {"status", status}, {"note", note}};
+        };
+        m_calibResult = QVariantMap{
+            {"ok", true}, {"learning", false}, {"redo", ""}, {"hadOthers", true}, {"quality", 1},
+            {"separation", 6.0}, {"broadbandSeparation", 2.0}, {"room", -70.0}, {"others", -52.0}, {"you", -40.0},
+            {"threshold", -46.0}, {"closeAt", -49.0}, {"band", "90 Hz – 200 Hz"}, {"gain", 20.0},
+            {"compThreshold", -22.0}, {"makeup", 8.0}, {"closeCheck", true}, {"tiltMeasured", false},
+            {"tiltGap", 0.5}, {"headroom", 6.0}, {"tips", QStringList{}},
+            {"steps", QVariantList{
+                step("room", "Quiet room", "ok", "Nice and quiet."),
+                step("others", "Other voices", "warn", "These voices sounded as close and loud as you. Was it you talking? Redo it while staying silent."),
+                step("you", "Your voice", "ok", "Clear and strong.")}}};
+        m_calibPhase = "done";
+    }
+}
+
+Controller::~Controller() {
+    m_analysis.waitForFinished();
+    saveNow();
+}
+
+// ---------------------------------------------------------------- params
+
+int Controller::idForKey(const QString &key) const {
+    for (int i = 0; i < PARAM_COUNT; ++i)
+        if (key == QLatin1String(kParams[i].key)) return i;
+    return -1;
+}
+
+double Controller::defaultValue(const QString &key) const {
+    const int id = idForKey(key);
+    return id < 0 ? 0 : kParams[id].def;
+}
+
+void Controller::applyToEngine(int id, double value) {
+    m_engine.params.set(id, float(value));
+    if (id != Bypass) m_saveTimer.start();
+    if (id == InputGain || id == GateFocus || id == GateScLow || id == GateScHigh) emit zonesChanged();
+}
+
+void Controller::onParamEdited(const QString &key, const QVariant &value) {
+    const int id = idForKey(key);
+    if (id < 0) return;
+    const double v = std::clamp(value.toDouble(), double(kParams[id].min), double(kParams[id].max));
+    applyToEngine(id, v);
+    if (!isPersonalKey(key) && !m_currentPreset.isEmpty()) {
+        m_currentPreset.clear();
+        emit presetsChanged();
+    }
+}
+
+void Controller::setParam(const QString &key, double value) {
+    const int id = idForKey(key);
+    if (id < 0) return;
+    value = std::clamp(value, double(kParams[id].min), double(kParams[id].max));
+    m_params.insert(key, value);
+    onParamEdited(key, value);
+}
+
+void Controller::resetParam(const QString &key) { setParam(key, defaultValue(key)); }
+
+void Controller::addEffect(const QString &name) {
+    setParam(name + "On", 1);
+    setParam(name + "Added", 1);
+}
+
+void Controller::removeEffect(const QString &name) { setParam(name + "Added", 0); }
+
+void Controller::saveNow() {
+    QSettings s;
+    for (int i = 0; i < PARAM_COUNT; ++i)
+        if (i != Bypass) s.setValue(QString("params/") + kParams[i].key, m_params.value(kParams[i].key));
+    s.setValue("source", m_currentSource);
+    s.setValue("preset", m_currentPreset);
+    s.setValue("showWelcome", m_showWelcome);
+}
+
+// ---------------------------------------------------------------- devices
+
+void Controller::updateSources(const std::vector<SourceInfo> &list) {
+    QVariantList out;
+    for (const auto &s : list) {
+        QVariantMap m;
+        m["name"] = QString::fromStdString(s.name);
+        m["description"] = QString::fromStdString(s.description);
+        out << m;
+    }
+    m_sources = out;
+    emit sourcesChanged();
+
+    // First run with no usable default: pick the first hardware mic.
+    if (m_currentSource.isEmpty()) {
+        for (const auto &s : list) {
+            if (s.name.rfind("alsa_input.", 0) == 0) {
+                setCurrentSource(QString::fromStdString(s.name));
+                break;
+            }
+        }
+    }
+}
+
+void Controller::setCurrentSource(const QString &name) {
+    if (name == m_currentSource) return;
+    m_currentSource = name;
+    m_engine.setCaptureTarget(name.toStdString());
+    m_saveTimer.start();
+    emit currentSourceChanged();
+}
+
+void Controller::setMonitor(bool on) {
+    if (on == m_monitor) return;
+    m_monitor = on;
+    m_engine.setMonitor(on);
+    emit monitorChanged();
+}
+
+void Controller::setShowWelcome(bool on) {
+    if (on == m_showWelcome) return;
+    m_showWelcome = on;
+    m_saveTimer.start();
+    emit showWelcomeChanged();
+}
+
+// ---------------------------------------------------------------- meters
+
+void Controller::pollMeters() {
+    Meters &m = m_engine.meters;
+    m_inPeak = m.inPeak.exchange(-120);
+    m_noiseVad = m.noiseVad.exchange(0);
+    m_gateLevel = m.gateLevel.exchange(-120);
+    m_gateReduction = m.gateReduction.exchange(0);
+    m_gateOpen = m.gateOpen.exchange(0) > 0.5f;
+    m_compLevel = m.compLevel.exchange(-120);
+    m_compReduction = m.compReduction.exchange(0);
+    m_autoLevelGain = m.autoLevelGain.load();
+    m_gateTilt = m.gateTilt.exchange(-120);
+    m_deessReduction = m.deessReduction.exchange(0);
+    m_outPeak = m.outPeak.exchange(-120);
+    m_limReduction = m.limReduction.exchange(0);
+    emit metersChanged();
+    calibTick();
+}
+
+// ---------------------------------------------------------------- presets
+
+QString Controller::presetDir() const {
+    return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) + "/presets";
+}
+
+QStringList Controller::presetNames() const {
+    QStringList names;
+    for (const auto &p : builtinPresets()) names << p.name;
+    QDir dir(presetDir());
+    for (const QString &f : dir.entryList({"*.json"}, QDir::Files, QDir::Name)) names << f.chopped(5);
+    return names;
+}
+
+bool Controller::isBuiltinPreset(const QString &name) const {
+    for (const auto &p : builtinPresets())
+        if (name == p.name) return true;
+    return false;
+}
+
+void Controller::loadPreset(const QString &name) {
+    QVariantMap values;
+    bool found = false;
+    for (const auto &p : builtinPresets()) {
+        if (name == p.name) {
+            for (int i = 0; i < PARAM_COUNT; ++i)
+                if (!isPersonalKey(kParams[i].key)) values[kParams[i].key] = kParams[i].def;
+            for (auto it = p.values.begin(); it != p.values.end(); ++it) values[it.key()] = it.value();
+            found = true;
+        }
+    }
+    if (!found) {
+        QFile f(presetDir() + "/" + name + ".json");
+        if (!f.open(QIODevice::ReadOnly)) return;
+        values = QJsonDocument::fromJson(f.readAll()).object().toVariantMap();
+        values.remove("bypass");
+    }
+    for (auto it = values.begin(); it != values.end(); ++it) {
+        const int id = idForKey(it.key());
+        if (id < 0) continue;
+        m_params.insert(it.key(), it.value().toDouble());
+        applyToEngine(id, it.value().toDouble());
+    }
+    m_currentPreset = name;
+    emit presetsChanged();
+}
+
+void Controller::savePreset(const QString &rawName) {
+    const QString name = rawName.trimmed().replace('/', '-');
+    if (name.isEmpty() || isBuiltinPreset(name)) return;
+    QDir().mkpath(presetDir());
+    QJsonObject o;
+    for (int i = 0; i < PARAM_COUNT; ++i)
+        if (i != Bypass) o[kParams[i].key] = m_params.value(kParams[i].key).toDouble();
+    QFile f(presetDir() + "/" + name + ".json");
+    if (!f.open(QIODevice::WriteOnly)) return;
+    f.write(QJsonDocument(o).toJson());
+    m_currentPreset = name;
+    m_saveTimer.start();
+    emit presetsChanged();
+}
+
+void Controller::deletePreset(const QString &name) {
+    if (isBuiltinPreset(name)) return;
+    QFile::remove(presetDir() + "/" + name + ".json");
+    if (m_currentPreset == name) m_currentPreset.clear();
+    emit presetsChanged();
+}
+
+// ---------------------------------------------------------------- autostart
+
+bool Controller::autostart() const { return QFile::exists(autostartPath()); }
+
+bool Controller::autostartHidden() const { return QSettings().value("autostartHidden", true).toBool(); }
+
+// (Re)write the login entry so it always points at the copy of MicForge that's running now
+// (e.g. /usr/bin/micforge from the AUR, or ~/.local/bin/micforge from install.sh).
+void Controller::writeAutostartEntry() {
+    QDir().mkpath(QFileInfo(autostartPath()).path());
+    QFile f(autostartPath());
+    if (!f.open(QIODevice::WriteOnly)) return;
+    f.write(QString("[Desktop Entry]\nType=Application\nName=MicForge\n"
+                    "Comment=Microphone processing for voice chat\n"
+                    "Exec=\"%1\"%2\nIcon=micforge\n"
+                    "X-GNOME-Autostart-enabled=true\nX-KDE-autostart-phase=2\n")
+                .arg(QCoreApplication::applicationFilePath(), autostartHidden() ? " --minimized" : "")
+                .toUtf8());
+}
+
+void Controller::setAutostart(bool on) {
+    if (on == autostart()) return;
+    if (on) writeAutostartEntry();
+    else QFile::remove(autostartPath());
+    emit autostartChanged();
+}
+
+void Controller::setAutostartHidden(bool hidden) {
+    if (hidden == autostartHidden()) return;
+    QSettings().setValue("autostartHidden", hidden);
+    if (autostart()) writeAutostartEntry();
+    emit autostartChanged();
+}
+
+// ---------------------------------------------------------------- voice-separation setup
+//
+// Full setup:   prepRoom -> room -> [askOthers -> prepOthers -> others] -> prepYou -> you -> analysing -> done
+// Learn voices: learnPrep -> learn -> analysing -> done
+//   (adds an "other voices" sample to the saved recordings and re-analyses; nobody has to take part,
+//    they just need to be talking nearby, e.g. on their own call)
+// The recorder captures exactly what the gate's detector hears.
+
+namespace {
+struct PhaseDef { const char *name; int ticks; const char *next; };
+const PhaseDef kPhases[] = {
+    {"prepRoom", 45, "room"},       {"room", 120, "@afterRoom"},
+    {"prepOthers", 75, "others"},   {"others", 300, "prepYou"},
+    {"prepYou", 75, "you"},         {"you", 180, "analysing"},
+    {"learnPrep", 60, "learn"},     {"learn", 300, "analysing"},
+};
+
+QString calibDir() { return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/calib"; }
+
+void saveSamples(const QString &name, const std::vector<float> &v) {
+    QDir().mkpath(calibDir());
+    QFile f(calibDir() + "/" + name + ".f32");
+    if (v.empty()) { f.remove(); return; }
+    if (f.open(QIODevice::WriteOnly))
+        f.write(reinterpret_cast<const char *>(v.data()), qint64(v.size() * sizeof(float)));
+}
+
+std::vector<float> loadSamples(const QString &name, float gain) {
+    QFile f(calibDir() + "/" + name + ".f32");
+    if (!f.open(QIODevice::ReadOnly)) return {};
+    const QByteArray b = f.readAll();
+    std::vector<float> v(size_t(b.size()) / sizeof(float));
+    std::memcpy(v.data(), b.constData(), v.size() * sizeof(float));
+    if (gain != 1.0f)
+        for (auto &x : v) x *= gain;
+    return v;
+}
+
+QString fmtDbS(double v) { return QString::number(v, 'f', 0) + " dB"; }
+} // namespace
+
+bool Controller::hasRecordings() const {
+    return QFile::exists(calibDir() + "/room.f32") && QFile::exists(calibDir() + "/you.f32");
+}
+
+void Controller::applyNeeds() {
+    const bool others = m_params.value("needOthers").toDouble() > 0.5;
+    const bool noise = m_params.value("needNoise").toDouble() > 0.5;
+    const bool broadcast = m_params.value("needBroadcast").toDouble() > 0.5;
+    const bool builtIn = m_params.value("micType").toDouble() > 2.5;
+
+    addEffect("gate"); // Setup needs the Voice Gate in the chain
+    if (others) {
+        setParam("gateMode", 0);   // clean mute keeps other voices out best
+        setParam("gateRange", -40);
+        setParam("gateLookahead", 5);
+    } else {
+        setParam("gateCloseCheck", 0);
+        if (broadcast) setParam("gateMode", 1); // softer, more natural between phrases
+    }
+    if (builtIn) setParam("gateCloseCheck", 0);
+    if (noise) {
+        addEffect("noise");
+        setParam("lowCutFreq", std::max(100.0, m_params.value("lowCutFreq").toDouble()));
+    }
+    if (broadcast) {
+        addEffect("deess");
+        setParam("compRatio", 4);
+        setParam("tonePresence", std::max(2.0, m_params.value("tonePresence").toDouble()));
+    }
+}
+
+void Controller::startCalibration() {
+    m_analysis.waitForFinished();
+    setParam("bypass", 0);
+    addEffect("gate"); // Setup needs the Voice Gate in the chain
+    m_learning = false;
+    m_redo.clear();
+    m_takes.clear();
+    m_calibResult.clear();
+    enterPhase("prepRoom");
+}
+
+void Controller::startLearnOthers() {
+    if (!hasRecordings()) return;
+    m_analysis.waitForFinished();
+    setParam("bypass", 0);
+    addEffect("gate"); // Setup needs the Voice Gate in the chain
+    m_learning = true;
+    m_redo.clear();
+    m_takes.clear();
+    m_calibResult.clear();
+    enterPhase("learnPrep");
+}
+
+// Re-record one step ("room", "others" or "you") and re-tune using the saved recordings for the rest.
+void Controller::redoStep(const QString &step) {
+    if (!hasRecordings()) return;
+    if (step != "room" && step != "others" && step != "you") return;
+    m_analysis.waitForFinished();
+    setParam("bypass", 0);
+    addEffect("gate"); // Setup needs the Voice Gate in the chain
+    m_learning = false;
+    m_redo = step;
+    m_takes.clear();
+    m_calibResult.clear();
+    enterPhase(step == "room" ? "prepRoom" : step == "others" ? "prepOthers" : "prepYou");
+}
+
+// Re-analyse the saved recordings with the current analysis (used once after an update that improves it).
+void Controller::retuneFromRecordings() {
+    if (!hasRecordings() || !m_calibPhase.isEmpty()) return;
+    m_analysis.waitForFinished();
+    m_learning = false;
+    m_redo.clear();
+    m_takes.clear();
+    m_retune = true;
+    m_calibPhase = "analysing";
+    startAnalysis();
+}
+
+// Start the step that's currently recording again from its countdown (e.g. someone bumped the desk).
+void Controller::restartStep() {
+    QString prep;
+    if (m_calibPhase == "room" || m_calibPhase == "prepRoom") prep = "prepRoom";
+    else if (m_calibPhase == "others" || m_calibPhase == "prepOthers") prep = "prepOthers";
+    else if (m_calibPhase == "you" || m_calibPhase == "prepYou") prep = "prepYou";
+    else if (m_calibPhase == "learn" || m_calibPhase == "learnPrep") prep = "learnPrep";
+    if (prep.isEmpty()) return;
+    m_calibPhase = "restarting"; // don't keep the interrupted take
+    enterPhase(prep);
+}
+
+void Controller::enterPhase(const QString &phase) {
+    Recorder &rec = m_engine.recorder;
+    static const QStringList takes = {"room", "others", "you", "learn"};
+    // Keep the take that just finished.
+    if (takes.contains(m_calibPhase)) {
+        const size_t to = std::min(rec.pos.load(), rec.buf.size());
+        m_takes[m_calibPhase] = to > m_takeFrom ? std::vector<float>(rec.buf.begin() + m_takeFrom, rec.buf.begin() + to)
+                                                : std::vector<float>{};
+    }
+    // Each step records into a fresh buffer: restart the recorder at every countdown.
+    if (phase.startsWith("prep") || phase == "learnPrep") {
+        rec.active = false;
+        rec.pos = 0;
+    }
+    if (takes.contains(phase)) m_takeFrom = rec.pos.load();
+
+    rec.active = phase.startsWith("prep") || phase == "learnPrep" || takes.contains(phase);
+    m_calibPhase = phase;
+    m_calibTicks = 0;
+    m_calibProgress = 0;
+    emit calibChanged();
+    if (phase == "analysing") startAnalysis();
+}
+
+void Controller::calibTick() {
+    for (const auto &p : kPhases) {
+        if (m_calibPhase != p.name) continue;
+        ++m_calibTicks;
+        m_calibProgress = double(m_calibTicks) / p.ticks;
+        if (m_calibTicks >= p.ticks) {
+            QString next = p.next;
+            const bool takeDone = m_calibPhase == "room" || m_calibPhase == "others" || m_calibPhase == "you";
+            if (!m_redo.isEmpty() && takeDone) next = "analysing"; // redoing one step only
+            else if (next == "@afterRoom")
+                next = m_params.value("needOthers").toDouble() > 0.5 ? "askOthers" : "prepYou";
+            enterPhase(next);
+        } else {
+            emit calibChanged();
+        }
+        return;
+    }
+}
+
+void Controller::skipOthers() {
+    if (m_calibPhase != "askOthers") return;
+    m_takes.erase("others");
+    enterPhase("prepYou");
+}
+
+void Controller::continueCalibration() {
+    if (m_calibPhase == "askOthers") enterPhase("prepOthers");
+}
+
+void Controller::cancelCalibration() {
+    m_engine.recorder.active = false;
+    m_calibPhase.clear();
+    emit calibChanged();
+}
+
+void Controller::startAnalysis() {
+    auto take = [&](const char *n) {
+        auto it = m_takes.find(n);
+        return it == m_takes.end() ? std::vector<float>{} : it->second;
+    };
+    const float curGain = float(m_params.value("inputGain").toDouble());
+    std::vector<float> room, others, you;
+    if (m_learning || m_retune || !m_redo.isEmpty()) {
+        // Saved recordings were made at an older input gain: bring them to today's level.
+        const float g = dbToLin(curGain - float(QSettings().value("calib/recGain", curGain).toDouble()));
+        room = loadSamples("room", g);
+        you = loadSamples("you", g);
+        others = loadSamples("others", g);
+    }
+    if (m_retune) {
+        // nothing new: just re-analyse the saved recordings
+    } else if (m_learning) {
+        auto fresh = take("learn");
+        others.insert(others.end(), fresh.begin(), fresh.end());
+        const size_t maxOthers = 48000 * 60; // keep the most recent minute of other voices
+        if (others.size() > maxOthers) others.erase(others.begin(), others.end() - maxOthers);
+    } else if (m_redo == "room") {
+        room = take("room");
+    } else if (m_redo == "others") {
+        others = take("others");
+    } else if (m_redo == "you") {
+        you = take("you");
+    } else {
+        room = take("room");
+        you = take("you");
+        others = take("others");
+    }
+    saveSamples("room", room);
+    saveSamples("you", you);
+    saveSamples("others", others);
+    QSettings().setValue("calib/recGain", curGain);
+    emit recordingsChanged();
+
+    m_analysis.setFuture(QtConcurrent::run(
+        [room = std::move(room), others = std::move(others), you = std::move(you)] {
+            return analyseSeparation(room, others, you, 48000);
+        }));
+}
+
+void Controller::applyAnalysis(const SeparationResult &r) {
+    if (m_calibPhase != "analysing") return; // cancelled meanwhile
+    QVariantMap out;
+    out["learning"] = m_learning;
+    out["redo"] = m_redo;
+    out["hadOthers"] = r.hadOthers;
+    {
+        static const char *statusNames[] = {"ok", "warn", "bad", "none"};
+        auto row = [&](const char *id, const QString &label, const StepCheck &c) {
+            QVariantMap m;
+            m["id"] = id;
+            m["label"] = label;
+            m["status"] = statusNames[c.status];
+            m["note"] = tr(c.note);
+            return m;
+        };
+        QVariantList steps;
+        steps << row("room", tr("Quiet room"), checkRoom(r));
+        if (m_params.value("needOthers").toDouble() > 0.5 || r.hadOthers)
+            steps << row("others", tr("Other voices"), checkOthers(r));
+        steps << row("you", tr("Your voice"), checkYou(r));
+        out["steps"] = steps;
+    }
+    const bool needOthers = m_params.value("needOthers").toDouble() > 0.5 || m_learning;
+    const bool keepLevels = m_learning || m_retune; // don't touch gain/compressor
+    const bool builtIn = m_params.value("micType").toDouble() > 2.5;
+
+    if (!r.heardYou) {
+        out["ok"] = false;
+        out["message"] = tr("I couldn't hear you clearly in the “Your voice” recording, so no settings were "
+                            "changed. Check the Input meter moves when you talk (right microphone and input "
+                            "selected?), then redo just that step below.");
+        m_calibResult = out;
+        m_calibPhase = m_retune ? "" : "done";
+        m_retune = false;
+        emit calibChanged();
+        return;
+    }
+
+    // Input gain: aim for speech peaks around -12 dBFS (full setup only).
+    const double oldGain = m_params.value("inputGain").toDouble();
+    const double newGain = keepLevels ? oldGain : roundHalf(std::clamp(oldGain + (-12.0 - r.youPeakDb), -12.0, 36.0));
+    const double d = newGain - oldGain;
+    const double thr = roundHalf(std::clamp(r.threshold + d, -80.0, 0.0));
+    const bool closeOn = needOthers && !builtIn;
+
+    if (!keepLevels) {
+        const double speech = r.youPeakDb + d;
+        const double ratio = m_params.value("compRatio").toDouble();
+        const double cthr = roundHalf(std::clamp(speech - 10, -60.0, 0.0));
+        const double est = (speech - cthr) * (1.0 - 1.0 / std::max(1.0, ratio));
+        const double makeup = roundHalf(std::clamp(-9.0 - (speech - est), 0.0, 18.0));
+        setParam("inputGain", newGain);
+        setParam("compThreshold", cthr);
+        setParam("compMakeup", makeup);
+        out["compThreshold"] = cthr;
+        out["makeup"] = makeup;
+    }
+    if (m_learning) setParam("needOthers", 1);
+    setParam("gateFocus", r.focus ? 1 : 0);
+    setParam("gateScLow", r.scLow);
+    setParam("gateScHigh", r.scHigh);
+    setParam("gateThreshold", thr);
+    setParam("gateHysteresis", r.hysteresis);
+    setParam("gateLookahead", std::max(3.0, m_params.value("gateLookahead").toDouble()));
+    setParam("gateCloseCheck", closeOn ? 1 : 0);
+    if (closeOn) {
+        setParam("gateTilt", r.tiltThreshold);
+        setParam("gateTiltDir", r.tiltBrighter ? 1 : 0);
+    }
+
+    // Remember the measured zones so the gate meter can show them.
+    QSettings s;
+    s.setValue("calib/valid", true);
+    s.setValue("calib/room", r.roomDb + d);
+    s.setValue("calib/others", r.hadOthers ? r.othersDb + d : -200.0);
+    s.setValue("calib/you", r.youDb + d);
+    s.setValue("calib/gain", newGain);
+    s.setValue("calib/recGain", newGain); // recordings are rescaled from this gain next time
+    s.setValue("calib/focus", r.focus);
+    s.setValue("calib/scLow", r.scLow);
+    s.setValue("calib/scHigh", r.scHigh);
+    s.setValue("calib/youTilt", r.youTilt);
+    s.setValue("calib/othersTilt", r.hadOthers ? r.othersTilt : -200.0);
+    s.remove("calib/partner"); s.remove("calib/partnerLoud"); s.remove("calib/partnerTilt"); s.remove("calib/hasTilt");
+    // Recordings now correspond to the new gain: rescale the saved files once.
+    if (d != 0) {
+        const float g = dbToLin(float(d));
+        for (const char *n : {"room", "you", "others"}) saveSamples(n, loadSamples(n, g));
+    }
+    emit zonesChanged();
+
+    QStringList tips;
+    const int mic = int(m_params.value("micType").toDouble() + 0.5);
+    if (builtIn)
+        tips << tr("Built-in laptop/webcam mics hear the whole room, so telling voices apart is limited. "
+                   "A headset, or a dynamic mic close to your mouth, makes a big difference.");
+    if (needOthers && !r.hadOthers && !builtIn)
+        tips << tr("No other voices were recorded, so the closeness check was set from your voice alone: it "
+                   "blocks voices that sound further away than yours. Next time someone is talking nearby, "
+                   "click “Learn other voices” (they don't need to do anything) to fine-tune it.");
+    if (r.hadOthers && !r.tiltMeasured && !builtIn)
+        tips << tr("Other voices sounded about as close as yours, so the closeness check uses your voice "
+                   "only. Moving the mic closer to your mouth makes your voice stand out more.");
+    if (r.hadOthers && r.quality <= 1) {
+        if (mic == 0 || mic == 1)
+            tips << tr("Get closer: 2–5 cm from the mic. Halving the distance makes your voice about 6 dB louder "
+                       "than anyone else, and boosts its bass (which the closeness check uses).");
+        if (mic == 0)
+            tips << tr("Point the back of the mic (the cable end) towards the other person: that's where a "
+                       "dynamic cardioid mic like the SM57/SM58 is deaf.");
+        if (mic == 2)
+            tips << tr("Move the headset boom so the mic sits right at the corner of your mouth.");
+    }
+
+    out["ok"] = true;
+    out["quality"] = r.quality;
+    out["separation"] = r.separation;
+    out["broadbandSeparation"] = r.broadbandSeparation;
+    out["room"] = r.roomDb + d;
+    out["others"] = r.hadOthers ? r.othersDb + d : -200.0;
+    out["you"] = r.youDb + d;
+    out["threshold"] = thr;
+    out["closeAt"] = thr - r.hysteresis;
+    out["band"] = r.focus ? (r.scLow > 21 ? fmtHz(r.scLow) + " – " : QStringLiteral("below ")) + fmtHz(r.scHigh)
+                          : tr("full range");
+    out["gain"] = newGain;
+    out["closeCheck"] = closeOn;
+    out["tiltMeasured"] = r.tiltMeasured;
+    out["tiltGap"] = r.tiltGap;
+    out["youTilt"] = r.youTilt;
+    out["othersTilt"] = r.othersTilt;
+    out["tiltThreshold"] = r.tiltThreshold;
+    out["headroom"] = r.hadOthers ? thr - (r.othersDb + d) : 0.0;
+    out["tips"] = tips;
+    m_calibResult = out;
+    m_calibPhase = "done";
+    emit calibChanged();
+    emit recordingsChanged();
+    QSettings().setValue("calib/version", kCalibVersion);
+    if (m_retune) {
+        // Silent re-tune: don't leave a result page behind for the Setup window.
+        m_retune = false;
+        m_calibPhase.clear();
+        m_calibResult.clear();
+        emit calibChanged();
+    }
+    Q_UNUSED(fmtDbS);
+}
+
+QVariantMap Controller::zones() const {
+    QSettings s;
+    QVariantMap z;
+    const auto near = [](double a, double b) { return std::fabs(a - b) < 0.5; };
+    const bool valid = s.value("calib/valid").toBool() && s.contains("calib/others") &&
+                       (s.value("calib/focus").toBool() == (m_params.value("gateFocus").toDouble() > 0.5)) &&
+                       near(s.value("calib/scLow").toDouble(), m_params.value("gateScLow").toDouble()) &&
+                       near(s.value("calib/scHigh").toDouble(), m_params.value("gateScHigh").toDouble());
+    z["valid"] = valid;
+    if (!valid) return z;
+    const double off = m_params.value("inputGain").toDouble() - s.value("calib/gain").toDouble();
+    z["room"] = s.value("calib/room").toDouble() + off;
+    z["others"] = s.value("calib/others").toDouble() + off;
+    z["you"] = s.value("calib/you").toDouble() + off;
+    z["youTilt"] = s.value("calib/youTilt").toDouble();
+    z["othersTilt"] = s.value("calib/othersTilt", -200.0).toDouble();
+    return z;
+}

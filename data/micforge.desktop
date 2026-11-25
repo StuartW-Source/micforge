@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=MicForge
+GenericName=Microphone Processor
+Comment=Only your voice: noise gate, compressor, voice changer and VST3/LV2 plugins for your mic
+Exec=micforge
+Icon=micforge
+Terminal=false
+Categories=AudioVideo;Audio;Mixer;Qt;
+Keywords=microphone;mic;noise;gate;compressor;voice;changer;pipewire;discord;vst;lv2;
+StartupNotify=true
+StartupWMClass=micforge
