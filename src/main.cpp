@@ -40,10 +40,6 @@ int main(int argc, char *argv[]) {
     const bool testInstance = qEnvironmentVariableIsSet("MICFORGE_TEST");
     app.setApplicationName(testInstance ? "MicForgeTest" : "MicForge");
     app.setApplicationVersion(MICFORGE_VERSION);
-    if (testInstance) {
-        AudioEngine::prefix = "micforge_test";
-        AudioEngine::micDescription = "MicForge TEST (ignore)";
-    }
     app.setOrganizationName("MicForge");
     app.setDesktopFileName("micforge");
     app.setWindowIcon(QIcon::fromTheme("micforge", QIcon(":/icons/micforge.svg")));
@@ -87,6 +83,7 @@ int main(int argc, char *argv[]) {
     startup::CrashGuard guard;
     StartupInfo info;
     info.logPath = startup::logFilePath();
+    if (testInstance) info.backend = {"micforge_test", "MicForge TEST (ignore)"};
     if (cli.isSet(safeOpt) || qEnvironmentVariableIsSet("MICFORGE_SAFE_MODE")) {
         info.safeMode = true;
         info.safeModeReason = QObject::tr("You started MicForge in safe mode.");

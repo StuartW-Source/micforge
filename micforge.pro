@@ -19,12 +19,12 @@ VST3SDK = $$PWD/third_party/vst3sdk
 INCLUDEPATH += $$VST3SDK src
 
 SOURCES += \
-    src/main.cpp src/startup.cpp src/controller.cpp src/audioengine.cpp src/pluginmanager.cpp \
+    src/main.cpp src/startup.cpp src/controller.cpp src/audio/audiocore.cpp src/audio/pipewirebackend.cpp src/pluginmanager.cpp \
     src/plugins/plugins.cpp src/plugins/lv2host.cpp src/plugins/vst3host.cpp \
     src/optional/rnnoise_api.cpp src/optional/lilv_api.cpp
 
 HEADERS += \
-    src/params.h src/dsp.h src/effects.h src/separation.h src/audioengine.h src/controller.h \
+    src/params.h src/dsp.h src/effects.h src/separation.h src/audio/audiocore.h src/audio/audiobackend.h src/audio/pipewirebackend.h src/controller.h \
     src/pluginmanager.h src/plugins/plugins.h src/startup.h \
     src/platform/dynlib.h src/optional/rnnoise_api.h src/optional/lilv_api.h
 

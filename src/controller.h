@@ -1,6 +1,7 @@
 #pragma once
 
-#include "audioengine.h"
+#include "audio/audiobackend.h"
+#include "audio/audiocore.h"
 #include "separation.h"
 #include "pluginmanager.h"
 #include "optional/rnnoise_api.h"
@@ -21,6 +22,7 @@ struct StartupInfo {
     bool settingsDamaged = false;
     QString damagedSettingsCopy;
     QString logPath;
+    mf::BackendConfig backend; // node names (the test instance uses its own)
 };
 
 class Controller : public QObject {
@@ -83,7 +85,8 @@ public:
     QString currentSource() const { return m_currentSource; }
     void setCurrentSource(const QString &name);
 
-    bool engineOk() const { return m_engine.connected; }
+    bool engineOk() const { return m_backend->connected(); }
+    QString backendName() const { return QString::fromStdString(m_backend->name()); }
     QString engineState() const;
     QString engineError() const;
     bool safeMode() const { return m_startup.safeMode; }
@@ -95,8 +98,8 @@ public:
     Q_INVOKABLE void restartEngine();
     Q_INVOKABLE void openLogFolder();
     Q_INVOKABLE void requestRestart(bool safeMode); // relaunch MicForge (normally or in safe mode)
-    bool captureRunning() const { return m_engine.captureRunning; }
-    bool virtualMicInUse() const { return m_engine.virtualMicInUse; }
+    bool captureRunning() const { return m_backend->inputRunning(); }
+    bool virtualMicInUse() const { return m_backend->virtualMicInUse(); }
 
     bool monitor() const { return m_monitor; }
     void setMonitor(bool on);
@@ -159,7 +162,9 @@ private:
     void scheduleEngineRetry(bool immediate);
     void onParamEdited(const QString &key, const QVariant &value);
     void applyToEngine(int id, double value);
-    void updateSources(const std::vector<mf::SourceInfo> &list);
+    void updateSources(const std::vector<mf::InputDevice> &list);
+    void adoptDefaultInputIfUnset();
+    bool m_defaultWaitOver = false;
     void calibTick();
     void enterPhase(const QString &phase);
     void startAnalysis();
@@ -167,7 +172,8 @@ private:
     QString presetDir() const;
     int idForKey(const QString &key) const;
 
-    mf::AudioEngine m_engine;
+    mf::AudioCore m_core;                       // platform-independent processing
+    std::unique_ptr<mf::IAudioBackend> m_backend; // OS audio system (PipeWire on Linux)
     QQmlPropertyMap m_params;
     PluginManager *m_plugins = nullptr;
     QTimer m_meterTimer, m_saveTimer;

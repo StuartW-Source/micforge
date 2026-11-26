@@ -1,4 +1,6 @@
-#include "audioengine.h"
+#include "audio/pipewirebackend.h"
+
+#include <pipewire/extensions/metadata.h>
 
 #include <pipewire/pipewire.h>
 #include <spa/param/audio/format-utils.h>
@@ -9,37 +11,19 @@
 
 namespace mf {
 
-// ---------------------------------------------------------------- Ring
-
-void Ring::write(const float *src, size_t n) {
-    const size_t wi = w.load(std::memory_order_relaxed);
-    const size_t space = buf.size() - (wi - r.load(std::memory_order_acquire));
-    n = std::min(n, space); // drop overflow; the reader trims latency
-    for (size_t i = 0; i < n; ++i) buf[(wi + i) & mask] = src[i];
-    w.store(wi + n, std::memory_order_release);
-}
-
-size_t Ring::read(float *dst, size_t n) {
-    const size_t ri = r.load(std::memory_order_relaxed);
-    n = std::min(n, w.load(std::memory_order_acquire) - ri);
-    for (size_t i = 0; i < n; ++i) dst[i] = buf[(ri + i) & mask];
-    r.store(ri + n, std::memory_order_release);
-    return n;
-}
-
 // ---------------------------------------------------------------- C callbacks
 
 namespace {
 
-void onCaptureProcess(void *d) { static_cast<AudioEngine *>(d)->processCapture(); }
-void onVmicProcess(void *d) { static_cast<AudioEngine *>(d)->processVirtualMic(); }
-void onMonitorProcess(void *d) { static_cast<AudioEngine *>(d)->processMonitor(); }
+void onCaptureProcess(void *d) { static_cast<PipeWireBackend *>(d)->processCapture(); }
+void onVmicProcess(void *d) { static_cast<PipeWireBackend *>(d)->processVirtualMic(); }
+void onMonitorProcess(void *d) { static_cast<PipeWireBackend *>(d)->processMonitor(); }
 
 void onCaptureState(void *d, pw_stream_state, pw_stream_state state, const char *) {
-    static_cast<AudioEngine *>(d)->captureState(state);
+    static_cast<PipeWireBackend *>(d)->captureState(state);
 }
 void onVmicState(void *d, pw_stream_state, pw_stream_state state, const char *) {
-    static_cast<AudioEngine *>(d)->virtualMicState(state);
+    static_cast<PipeWireBackend *>(d)->virtualMicState(state);
 }
 
 const pw_stream_events captureEvents = [] {
@@ -66,19 +50,32 @@ const pw_stream_events monitorEvents = [] {
 }();
 
 void onRegistryGlobal(void *d, uint32_t id, uint32_t, const char *type, uint32_t, const spa_dict *props) {
-    static_cast<AudioEngine *>(d)->registryGlobal(id, type, props);
+    static_cast<PipeWireBackend *>(d)->registryGlobal(id, type, props);
 }
-void onRegistryRemove(void *d, uint32_t id) { static_cast<AudioEngine *>(d)->registryRemove(id); }
+void onRegistryRemove(void *d, uint32_t id) { static_cast<PipeWireBackend *>(d)->registryRemove(id); }
 
 // PipeWire reports a lost connection (daemon restarted / crashed) as an error on the core object.
 void onCoreError(void *d, uint32_t id, int, int res, const char *message) {
-    if (id == PW_ID_CORE && res == -EPIPE) static_cast<AudioEngine *>(d)->connectionLost(message);
+    if (id == PW_ID_CORE && res == -EPIPE) static_cast<PipeWireBackend *>(d)->connectionLost(message);
 }
 
 const pw_core_events coreEvents = [] {
     pw_core_events e{};
     e.version = PW_VERSION_CORE_EVENTS;
     e.error = onCoreError;
+    return e;
+}();
+
+// "default" metadata carries the system's default microphone (key default.audio.source).
+int onMetadataProperty(void *d, uint32_t subject, const char *key, const char *, const char *value) {
+    if (subject == PW_ID_CORE) static_cast<PipeWireBackend *>(d)->metadataProperty(key, value);
+    return 0;
+}
+
+const pw_metadata_events metadataEvents = [] {
+    pw_metadata_events e{};
+    e.version = PW_VERSION_METADATA_EVENTS;
+    e.property = onMetadataProperty;
     return e;
 }();
 
@@ -93,7 +90,7 @@ const pw_registry_events registryEvents = [] {
 const spa_pod *buildFormat(spa_pod_builder *b, uint32_t channels) {
     spa_audio_info_raw info{};
     info.format = SPA_AUDIO_FORMAT_F32;
-    info.rate = AudioEngine::kRate;
+    info.rate = AudioCore::kRate;
     info.channels = channels;
     if (channels == 1) {
         info.position[0] = SPA_AUDIO_CHANNEL_MONO;
@@ -108,13 +105,14 @@ const spa_pod *buildFormat(spa_pod_builder *b, uint32_t channels) {
 
 // ---------------------------------------------------------------- lifecycle
 
-AudioEngine::AudioEngine() : scratch(16384), vmicRing(16384), monitorRing(16384) {
-    chain.recorder = &recorder;
-    chain.blockHook = &PluginRack::hook;
-    chain.blockCtx = &rack;
+PipeWireBackend::PipeWireBackend(AudioCore &audioCore, const BackendConfig &config)
+    : m_core(audioCore), m_config(config) {}
+
+std::unique_ptr<IAudioBackend> createAudioBackend(AudioCore &core, const BackendConfig &config) {
+    return std::make_unique<PipeWireBackend>(core, config);
 }
 
-AudioEngine::~AudioEngine() {
+PipeWireBackend::~PipeWireBackend() {
     if (!loop) return;
     pw_thread_loop_lock(loop);
     teardown();
@@ -124,13 +122,18 @@ AudioEngine::~AudioEngine() {
 }
 
 // Tear down everything that belongs to one PipeWire connection. Call with the loop locked.
-void AudioEngine::teardown() {
+void PipeWireBackend::teardown() {
     destroyMonitor();
     destroyCapture();
     if (vmic) {
         spa_hook_remove(vmicHook.get());
         pw_stream_destroy(vmic);
         vmic = nullptr;
+    }
+    if (metadata) {
+        spa_hook_remove(metadataHook.get());
+        pw_proxy_destroy(reinterpret_cast<pw_proxy *>(metadata));
+        metadata = nullptr;
     }
     if (registry) {
         spa_hook_remove(registryHook.get());
@@ -148,14 +151,14 @@ void AudioEngine::teardown() {
     }
     sources.clear();
     links.clear();
-    connected = false;
-    captureRunning = false;
-    virtualMicInUse = false;
+    m_connected = false;
+    m_captureRunning = false;
+    m_virtualMicInUse = false;
 }
 
 // Connect to PipeWire and create the streams. Safe to call again after a failure or a lost
 // connection: whatever is left of the previous connection is torn down first.
-bool AudioEngine::start() {
+bool PipeWireBackend::start() {
     if (!loop) {
         loop = pw_thread_loop_new("micforge", nullptr);
         if (!loop) {
@@ -183,7 +186,7 @@ bool AudioEngine::start() {
     coreHook = std::make_unique<spa_hook>();
     std::memset(coreHook.get(), 0, sizeof(spa_hook));
     pw_core_add_listener(core, coreHook.get(), &coreEvents, this);
-    connected = true;
+    m_connected = true;
     setError("");
 
     registryHook = std::make_unique<spa_hook>();
@@ -191,38 +194,62 @@ bool AudioEngine::start() {
     registry = pw_core_get_registry(core, PW_VERSION_REGISTRY, 0);
     pw_registry_add_listener(registry, registryHook.get(), &registryEvents, this);
 
-    vmicPrimed = monitorPrimed = false;
-    chain.reset();
+    m_core.resetOutputs();
+    m_core.resetChain();
     createVirtualMic();
     if (!targetName.empty()) createCapture();
-    if (monitorOn) createMonitor();
+    if (m_core.monitorEnabled()) createMonitor();
     pw_thread_loop_unlock(loop);
     if (onStateChanged) onStateChanged();
     return true;
 }
 
-void AudioEngine::setError(const std::string &e) {
-    std::lock_guard<std::mutex> l(errorMutex);
-    lastError = e;
+void PipeWireBackend::setError(const std::string &e) {
+    std::lock_guard<std::mutex> l(m_mutex);
+    m_error = e;
 }
 
-std::string AudioEngine::error() const {
-    std::lock_guard<std::mutex> l(errorMutex);
-    return lastError;
+std::string PipeWireBackend::error() const {
+    std::lock_guard<std::mutex> l(m_mutex);
+    return m_error;
+}
+
+std::string PipeWireBackend::defaultInputDevice() const {
+    std::lock_guard<std::mutex> l(m_mutex);
+    return m_defaultInput;
+}
+
+// Value looks like {"name":"alsa_input.usb-..."}.
+void PipeWireBackend::metadataProperty(const char *key, const char *value) {
+    if (!key || std::strcmp(key, "default.audio.source") != 0) return;
+    std::string name;
+    if (value) {
+        const std::string v(value);
+        const auto k = v.find("\"name\"");
+        const auto q1 = k == std::string::npos ? k : v.find('"', v.find(':', k) + 1);
+        const auto q2 = q1 == std::string::npos ? q1 : v.find('"', q1 + 1);
+        if (q2 != std::string::npos) name = v.substr(q1 + 1, q2 - q1 - 1);
+    }
+    {
+        std::lock_guard<std::mutex> l(m_mutex);
+        if (name == m_defaultInput) return;
+        m_defaultInput = name;
+    }
+    if (onDefaultInputChanged) onDefaultInputChanged();
 }
 
 // Called on the PipeWire thread when the daemon goes away. Only flags the state; the owner
 // reconnects from its own thread by calling start() again (never tear down inside a callback).
-void AudioEngine::connectionLost(const char *message) {
-    if (!connected.exchange(false)) return;
+void PipeWireBackend::connectionLost(const char *message) {
+    if (!m_connected.exchange(false)) return;
     setError(std::string("lost the connection to PipeWire") + (message ? std::string(" (") + message + ")" : ""));
-    captureRunning = false;
-    virtualMicInUse = false;
+    m_captureRunning = false;
+    m_virtualMicInUse = false;
     if (onConnectionLost) onConnectionLost();
     if (onStateChanged) onStateChanged();
 }
 
-void AudioEngine::setCaptureTarget(const std::string &nodeName) {
+void PipeWireBackend::setInputDevice(const std::string &nodeName) {
     if (!loop || !core) {
         targetName = nodeName;
         return;
@@ -234,8 +261,8 @@ void AudioEngine::setCaptureTarget(const std::string &nodeName) {
     pw_thread_loop_unlock(loop);
 }
 
-void AudioEngine::setMonitor(bool on) {
-    monitorOn = on;
+void PipeWireBackend::setMonitor(bool on) {
+    m_core.setMonitorEnabled(on);
     if (!loop || !core) return;
     pw_thread_loop_lock(loop);
     if (on && !monitor) createMonitor();
@@ -245,15 +272,15 @@ void AudioEngine::setMonitor(bool on) {
 
 // ---------------------------------------------------------------- streams
 
-void AudioEngine::createCapture() {
+void PipeWireBackend::createCapture() {
     pw_properties *props = pw_properties_new(
         PW_KEY_MEDIA_TYPE, "Audio",
         PW_KEY_MEDIA_CATEGORY, "Capture",
         PW_KEY_APP_NAME, "MicForge",
-        PW_KEY_NODE_NAME, (prefix + "_input").c_str(),
+        PW_KEY_NODE_NAME, (m_config.idPrefix + "_input").c_str(),
         PW_KEY_NODE_DESCRIPTION, "MicForge input",
         PW_KEY_NODE_LATENCY, "256/48000",
-        PW_KEY_NODE_GROUP, (prefix + ".group").c_str(),
+        PW_KEY_NODE_GROUP, (m_config.idPrefix + ".group").c_str(),
         PW_KEY_TARGET_OBJECT, targetName.c_str(),
         PW_KEY_NODE_DONT_RECONNECT, "true", // never fall back to the default mic (could be ourselves)
         PW_KEY_STREAM_DONT_REMIX, "true",   // keep left/right separate so we can pick the mic channel
@@ -267,7 +294,7 @@ void AudioEngine::createCapture() {
     uint8_t buffer[1024];
     spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
     const spa_pod *params[1] = {buildFormat(&b, 2)};
-    chain.reset();
+    m_core.resetChain();
     pw_stream_connect(capture, PW_DIRECTION_INPUT, PW_ID_ANY,
                       pw_stream_flags(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS |
                                       PW_STREAM_FLAG_RT_PROCESS),
@@ -275,25 +302,25 @@ void AudioEngine::createCapture() {
     targetMissing = false;
 }
 
-void AudioEngine::destroyCapture() {
+void PipeWireBackend::destroyCapture() {
     if (!capture) return;
     spa_hook_remove(captureHook.get());
     pw_stream_destroy(capture);
     capture = nullptr;
-    captureRunning = false;
+    m_captureRunning = false;
     if (onStateChanged) onStateChanged();
 }
 
-void AudioEngine::createVirtualMic() {
+void PipeWireBackend::createVirtualMic() {
     pw_properties *props = pw_properties_new(
         PW_KEY_MEDIA_TYPE, "Audio",
         PW_KEY_MEDIA_CLASS, "Audio/Source",
         PW_KEY_APP_NAME, "MicForge",
         PW_KEY_NODE_NAME, virtualMicName().c_str(),
-        PW_KEY_NODE_DESCRIPTION, micDescription.c_str(),
+        PW_KEY_NODE_DESCRIPTION, m_config.virtualMicDescription.c_str(),
         PW_KEY_NODE_NICK, "MicForge",
         PW_KEY_NODE_LATENCY, "256/48000",
-        PW_KEY_NODE_GROUP, (prefix + ".group").c_str(),
+        PW_KEY_NODE_GROUP, (m_config.idPrefix + ".group").c_str(),
         "device.icon-name", "audio-input-microphone",
         nullptr);
 
@@ -309,13 +336,13 @@ void AudioEngine::createVirtualMic() {
                       pw_stream_flags(PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS), params, 1);
 }
 
-void AudioEngine::createMonitor() {
+void PipeWireBackend::createMonitor() {
     pw_properties *props = pw_properties_new(
         PW_KEY_MEDIA_TYPE, "Audio",
         PW_KEY_MEDIA_CATEGORY, "Playback",
         PW_KEY_MEDIA_ROLE, "Production",
         PW_KEY_APP_NAME, "MicForge",
-        PW_KEY_NODE_NAME, (prefix + "_monitor").c_str(),
+        PW_KEY_NODE_NAME, (m_config.idPrefix + "_monitor").c_str(),
         PW_KEY_NODE_DESCRIPTION, "MicForge monitor (listen to yourself)",
         PW_KEY_NODE_LATENCY, "256/48000",
         nullptr);
@@ -328,14 +355,14 @@ void AudioEngine::createMonitor() {
     uint8_t buffer[1024];
     spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
     const spa_pod *params[1] = {buildFormat(&b, 1)};
-    monitorPrimed = false;
+    m_core.resetMonitor();
     pw_stream_connect(monitor, PW_DIRECTION_OUTPUT, PW_ID_ANY,
                       pw_stream_flags(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS |
                                       PW_STREAM_FLAG_RT_PROCESS),
                       params, 1);
 }
 
-void AudioEngine::destroyMonitor() {
+void PipeWireBackend::destroyMonitor() {
     if (!monitor) return;
     spa_hook_remove(monitorHook.get());
     pw_stream_destroy(monitor);
@@ -344,7 +371,7 @@ void AudioEngine::destroyMonitor() {
 
 // ---------------------------------------------------------------- realtime
 
-void AudioEngine::processCapture() {
+void PipeWireBackend::processCapture() {
     pw_buffer *b = pw_stream_dequeue_buffer(capture);
     if (!b) return;
     spa_data &d = b->buffer->datas[0];
@@ -352,92 +379,64 @@ void AudioEngine::processCapture() {
         const uint32_t offs = std::min(d.chunk->offset, d.maxsize);
         const uint32_t size = std::min(d.chunk->size, d.maxsize - offs);
         const float *in = static_cast<const float *>(SPA_PTROFF(d.data, offs, void));
-        uint32_t frames = size / (sizeof(float) * 2);
-        while (frames > 0) {
-            const uint32_t n = std::min<uint32_t>(frames, scratch.size());
-            chain.process(in, 2, scratch.data(), int(n), params, meters);
-            vmicRing.write(scratch.data(), n);
-            if (monitorOn.load(std::memory_order_relaxed)) monitorRing.write(scratch.data(), n);
-            in += n * 2;
-            frames -= n;
-        }
+        m_core.processInput(in, 2, size / uint32_t(sizeof(float) * 2));
     }
     pw_stream_queue_buffer(capture, b);
 }
 
-// Pull from a ring with a small safety cushion and bounded latency.
-void AudioEngine::readRing(Ring &ring, bool &primed, float *out, uint32_t n) {
-    size_t avail = ring.available();
-    if (!primed) {
-        if (avail < size_t(n) * 2) {
-            std::fill(out, out + n, 0.0f);
-            return;
-        }
-        primed = true;
-    }
-    if (avail > size_t(n) * 4 + 1024) { // too much queued (e.g. nobody was listening): catch up
-        ring.skip(avail - size_t(n) * 2);
-    }
-    const size_t got = ring.read(out, n);
-    if (got < n) {
-        std::fill(out + got, out + n, 0.0f);
-        primed = false;
-    }
-}
-
-void AudioEngine::processVirtualMic() {
-    pw_buffer *b = pw_stream_dequeue_buffer(vmic);
+namespace {
+template <typename Fill> void fillOutput(pw_stream *stream, Fill fill) {
+    pw_buffer *b = pw_stream_dequeue_buffer(stream);
     if (!b) return;
     spa_data &d = b->buffer->datas[0];
     if (d.data) {
         uint32_t n = d.maxsize / sizeof(float);
-        if (b->requested) n = std::min<uint32_t>(n, b->requested);
-        readRing(vmicRing, vmicPrimed, static_cast<float *>(d.data), n);
+        if (b->requested) n = std::min<uint32_t>(n, uint32_t(b->requested));
+        fill(static_cast<float *>(d.data), n);
         d.chunk->offset = 0;
         d.chunk->stride = sizeof(float);
         d.chunk->size = n * sizeof(float);
     }
-    pw_stream_queue_buffer(vmic, b);
+    pw_stream_queue_buffer(stream, b);
 }
+} // namespace
 
-void AudioEngine::processMonitor() {
-    pw_buffer *b = pw_stream_dequeue_buffer(monitor);
-    if (!b) return;
-    spa_data &d = b->buffer->datas[0];
-    if (d.data) {
-        uint32_t n = d.maxsize / sizeof(float);
-        if (b->requested) n = std::min<uint32_t>(n, b->requested);
-        readRing(monitorRing, monitorPrimed, static_cast<float *>(d.data), n);
-        d.chunk->offset = 0;
-        d.chunk->stride = sizeof(float);
-        d.chunk->size = n * sizeof(float);
-    }
-    pw_stream_queue_buffer(monitor, b);
-}
+void PipeWireBackend::processVirtualMic() { fillOutput(vmic, [this](float *o, uint32_t n) { m_core.readVirtualMic(o, n); }); }
+void PipeWireBackend::processMonitor() { fillOutput(monitor, [this](float *o, uint32_t n) { m_core.readMonitor(o, n); }); }
 
 // ---------------------------------------------------------------- state / registry
 
-void AudioEngine::captureState(int state) {
-    captureRunning = state == PW_STREAM_STATE_STREAMING;
+void PipeWireBackend::captureState(int state) {
+    m_captureRunning = state == PW_STREAM_STATE_STREAMING;
     if (onStateChanged) onStateChanged();
 }
 
-void AudioEngine::virtualMicState(int) { updateInUse(); }
+void PipeWireBackend::virtualMicState(int) { updateInUse(); }
 
 // "In use" = at least one link leaves the virtual mic node (an app is recording from it).
-void AudioEngine::updateInUse() {
+void PipeWireBackend::updateInUse() {
     const uint32_t me = vmic ? pw_stream_get_node_id(vmic) : SPA_ID_INVALID;
     bool used = false;
     for (auto &[id, outNode] : links)
         if (outNode == me) used = true;
-    if (used != virtualMicInUse.exchange(used) && onStateChanged) onStateChanged();
+    if (used != m_virtualMicInUse.exchange(used) && onStateChanged) onStateChanged();
 }
 
-void AudioEngine::registryGlobal(uint32_t id, const char *type, const spa_dict *props) {
+void PipeWireBackend::registryGlobal(uint32_t id, const char *type, const spa_dict *props) {
     if (props && std::strcmp(type, PW_TYPE_INTERFACE_Link) == 0) {
         if (const char *out = spa_dict_lookup(props, PW_KEY_LINK_OUTPUT_NODE)) {
             links[id] = uint32_t(std::strtoul(out, nullptr, 10));
             updateInUse();
+        }
+        return;
+    }
+    if (props && !metadata && std::strcmp(type, PW_TYPE_INTERFACE_Metadata) == 0) {
+        const char *mname = spa_dict_lookup(props, "metadata.name");
+        if (mname && std::strcmp(mname, "default") == 0) {
+            metadata = static_cast<pw_metadata *>(pw_registry_bind(registry, id, PW_TYPE_INTERFACE_Metadata, PW_VERSION_METADATA, 0));
+            metadataHook = std::make_unique<spa_hook>();
+            std::memset(metadataHook.get(), 0, sizeof(spa_hook));
+            pw_metadata_add_listener(metadata, metadataHook.get(), &metadataEvents, this);
         }
         return;
     }
@@ -449,7 +448,7 @@ void AudioEngine::registryGlobal(uint32_t id, const char *type, const spa_dict *
 
     const char *desc = spa_dict_lookup(props, PW_KEY_NODE_DESCRIPTION);
     if (!desc) desc = spa_dict_lookup(props, PW_KEY_NODE_NICK);
-    sources[id] = SourceInfo{id, name, desc ? desc : name};
+    sources[id] = InputDevice{name, desc ? desc : name};
     publishSources();
 
     // Our mic came back (e.g. USB interface re-plugged): reconnect to it.
@@ -459,23 +458,23 @@ void AudioEngine::registryGlobal(uint32_t id, const char *type, const spa_dict *
     }
 }
 
-void AudioEngine::registryRemove(uint32_t id) {
+void PipeWireBackend::registryRemove(uint32_t id) {
     if (links.erase(id)) {
         updateInUse();
         return;
     }
     auto it = sources.find(id);
     if (it == sources.end()) return;
-    if (it->second.name == targetName) targetMissing = true;
+    if (it->second.id == targetName) targetMissing = true;
     sources.erase(it);
     publishSources();
 }
 
-void AudioEngine::publishSources() {
-    if (!onSourcesChanged) return;
-    std::vector<SourceInfo> list;
+void PipeWireBackend::publishSources() {
+    if (!onDevicesChanged) return;
+    std::vector<InputDevice> list;
     for (auto &[id, s] : sources) list.push_back(s);
-    onSourcesChanged(std::move(list));
+    onDevicesChanged(std::move(list));
 }
 
 } // namespace mf

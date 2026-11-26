@@ -57,14 +57,6 @@ QString autostartPath() {
     return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + "/autostart/micforge.desktop";
 }
 
-// Ask PipeWire-Pulse which mic is the system default (used on first run only).
-QString systemDefaultSource() {
-    QProcess p;
-    p.start("pactl", {"get-default-source"});
-    if (!p.waitForFinished(1500)) return {};
-    return QString::fromUtf8(p.readAllStandardOutput()).trimmed();
-}
-
 constexpr int kCalibVersion = 2; // bump when the analysis changes in a way that should re-tune saved setups
 
 QString fmtHz(double v) { return v >= 1000 ? QString::number(v / 1000, 'f', 1) + " kHz" : QString::number(v, 'f', 0) + " Hz"; }
@@ -84,9 +76,9 @@ Controller::Controller(const StartupInfo &startup, QObject *parent) : QObject(pa
         if (!m_startup.safeMode && (!ok || !std::isfinite(v))) v = kParams[i].def;
         v = std::clamp(v, double(kParams[i].min), double(kParams[i].max));
         m_params.insert(kParams[i].key, v);
-        m_engine.params.set(i, float(v));
+        m_core.params.set(i, float(v));
     }
-    m_engine.params.set(Bypass, 0); // never start bypassed
+    m_core.params.set(Bypass, 0); // never start bypassed
     m_params.insert("bypass", 0);
     m_currentSource = s.value("source").toString();
     m_currentPreset = s.value("preset", builtinPresets().first().name).toString();
@@ -95,15 +87,16 @@ Controller::Controller(const StartupInfo &startup, QObject *parent) : QObject(pa
 
     connect(&m_params, &QQmlPropertyMap::valueChanged, this, &Controller::onParamEdited);
 
-    m_engine.onSourcesChanged = [this](std::vector<SourceInfo> list) {
+    m_backend = createAudioBackend(m_core, m_startup.backend);
+    m_backend->onDevicesChanged = [this](std::vector<InputDevice> list) {
         QMetaObject::invokeMethod(this, [this, list] { updateSources(list); }, Qt::QueuedConnection);
     };
-    m_engine.onStateChanged = [this] {
+    m_backend->onStateChanged = [this] {
         QMetaObject::invokeMethod(this, [this] { emit statusChanged(); }, Qt::QueuedConnection);
     };
-    m_engine.onConnectionLost = [this] {
+    m_backend->onConnectionLost = [this] {
         QMetaObject::invokeMethod(this, [this] {
-            qWarning("audio engine: %s; reconnecting", m_engine.error().c_str());
+            qWarning("audio engine: %s; reconnecting", m_backend->error().c_str());
             scheduleEngineRetry(true);
         }, Qt::QueuedConnection);
     };
@@ -121,16 +114,19 @@ Controller::Controller(const StartupInfo &startup, QObject *parent) : QObject(pa
         qWarning("optional feature: LV2 hosting unavailable: %s", qPrintable(lv2Why));
     }
 
-    if (m_currentSource.isEmpty()) {
-        const QString def = systemDefaultSource();
-        if (!def.isEmpty() && !def.startsWith("micforge") && !def.contains("easyeffects"))
-            m_currentSource = def;
-    }
-    m_engine.setCaptureTarget(m_currentSource.toStdString());
+    // First run (no microphone chosen yet): adopt the system default as soon as the backend reports it.
+    m_backend->onDefaultInputChanged = [this] {
+        QMetaObject::invokeMethod(this, [this] { adoptDefaultInputIfUnset(); }, Qt::QueuedConnection);
+    };
+    m_backend->setInputDevice(m_currentSource.toStdString());
     startEngine();
+    QTimer::singleShot(3000, this, [this] {
+        m_defaultWaitOver = true;
+        adoptDefaultInputIfUnset();
+    });
 
     // Third-party plugins: restore the saved chain now (not in safe mode), discover what's installed in the background.
-    m_plugins = new PluginManager(&m_engine.rack, AudioEngine::kRate, this);
+    m_plugins = new PluginManager(&m_core.rack, AudioCore::kRate, this);
     m_plugins->setReadOnly(m_startup.safeMode);
     if (!m_startup.safeMode) m_plugins->restore();
     QTimer::singleShot(1200, m_plugins, [this] { m_plugins->rescan(); });
@@ -174,6 +170,11 @@ Controller::Controller(const StartupInfo &startup, QObject *parent) : QObject(pa
 Controller::~Controller() {
     m_analysis.waitForFinished();
     saveNow();
+    // Explicit shutdown order: stop the audio thread, then destroy plugins (they live in m_core.rack,
+    // which is destroyed before Qt would delete child objects), then everything else.
+    m_backend.reset();
+    delete m_plugins;
+    m_plugins = nullptr;
 }
 
 // ---------------------------------------------------------------- params
@@ -190,7 +191,7 @@ double Controller::defaultValue(const QString &key) const {
 }
 
 void Controller::applyToEngine(int id, double value) {
-    m_engine.params.set(id, float(value));
+    m_core.params.set(id, float(value));
     if (id != Bypass) m_saveTimer.start();
     if (id == InputGain || id == GateFocus || id == GateScLow || id == GateScHigh) emit zonesChanged();
 }
@@ -235,24 +236,38 @@ void Controller::saveNow() {
 
 // ---------------------------------------------------------------- devices
 
-void Controller::updateSources(const std::vector<SourceInfo> &list) {
+void Controller::updateSources(const std::vector<InputDevice> &list) {
     QVariantList out;
     for (const auto &s : list) {
         QVariantMap m;
-        m["name"] = QString::fromStdString(s.name);
-        m["description"] = QString::fromStdString(s.description);
+        m["name"] = QString::fromStdString(s.id);
+        m["description"] = QString::fromStdString(s.name);
         out << m;
     }
     m_sources = out;
     emit sourcesChanged();
+    adoptDefaultInputIfUnset();
+}
 
-    // First run with no usable default: pick the first hardware mic.
-    if (m_currentSource.isEmpty()) {
-        for (const auto &s : list) {
-            if (s.name.rfind("alsa_input.", 0) == 0) {
-                setCurrentSource(QString::fromStdString(s.name));
-                break;
-            }
+// Only when the user hasn't chosen a microphone yet: use the system default (never MicForge's own or
+// another processing app's virtual mic), else the first hardware microphone.
+void Controller::adoptDefaultInputIfUnset() {
+    if (!m_currentSource.isEmpty() || m_sources.isEmpty()) return;
+    auto usable = [](const QString &id) { return !id.startsWith("micforge") && !id.contains("easyeffects"); };
+    const QString def = QString::fromStdString(m_backend->defaultInputDevice());
+    for (const auto &v : m_sources)
+        if (v.toMap()["name"].toString() == def && usable(def)) {
+            qInfo("devices: no microphone chosen yet; using the system default %s", qPrintable(def));
+            return setCurrentSource(def);
+        }
+    // Devices and the default are announced one by one: keep waiting for the default to appear.
+    // Only if it hasn't after a few seconds (adoptFallbackInput) take the first hardware microphone.
+    if (!m_defaultWaitOver) return;
+    for (const auto &v : m_sources) {
+        const QString id = v.toMap()["name"].toString();
+        if (id.startsWith("alsa_input.") && usable(id)) {
+            qInfo("devices: system default (%s) isn't usable; using %s", qPrintable(def), qPrintable(id));
+            return setCurrentSource(id);
         }
     }
 }
@@ -260,7 +275,7 @@ void Controller::updateSources(const std::vector<SourceInfo> &list) {
 void Controller::setCurrentSource(const QString &name) {
     if (name == m_currentSource) return;
     m_currentSource = name;
-    m_engine.setCaptureTarget(name.toStdString());
+    m_backend->setInputDevice(name.toStdString());
     m_saveTimer.start();
     emit currentSourceChanged();
 }
@@ -268,7 +283,7 @@ void Controller::setCurrentSource(const QString &name) {
 void Controller::setMonitor(bool on) {
     if (on == m_monitor) return;
     m_monitor = on;
-    m_engine.setMonitor(on);
+    m_backend->setMonitor(on);
     emit monitorChanged();
 }
 
@@ -282,7 +297,7 @@ void Controller::setShowWelcome(bool on) {
 // ---------------------------------------------------------------- meters
 
 void Controller::pollMeters() {
-    Meters &m = m_engine.meters;
+    Meters &m = m_core.meters;
     m_inPeak = m.inPeak.exchange(-120);
     m_noiseVad = m.noiseVad.exchange(0);
     m_gateLevel = m.gateLevel.exchange(-120);
@@ -536,7 +551,7 @@ void Controller::restartStep() {
 }
 
 void Controller::enterPhase(const QString &phase) {
-    Recorder &rec = m_engine.recorder;
+    Recorder &rec = m_core.recorder;
     static const QStringList takes = {"room", "others", "you", "learn"};
     // Keep the take that just finished.
     if (takes.contains(m_calibPhase)) {
@@ -589,7 +604,7 @@ void Controller::continueCalibration() {
 }
 
 void Controller::cancelCalibration() {
-    m_engine.recorder.active = false;
+    m_core.recorder.active = false;
     m_calibPhase.clear();
     emit calibChanged();
 }
@@ -810,13 +825,13 @@ QVariantMap Controller::zones() const {
 // ---------------------------------------------------------------- audio engine lifecycle
 
 void Controller::startEngine() {
-    if (m_engine.start()) {
-        if (m_engineAttempts > 0) qInfo("audio engine: connected to PipeWire after %d retries", m_engineAttempts);
-        else qInfo("audio engine: connected to PipeWire");
+    if (m_backend->start()) {
+        if (m_engineAttempts > 0) qInfo("audio engine: connected to %s after %d retries", m_backend->name().c_str(), m_engineAttempts);
+        else qInfo("audio engine: connected to %s", m_backend->name().c_str());
         m_engineAttempts = 0; // start() already (re)created the capture stream for the chosen microphone
     } else {
         if (m_engineAttempts == 0 || m_engineAttempts % 10 == 0)
-            qWarning("audio engine: %s (attempt %d); will retry", m_engine.error().c_str(), m_engineAttempts + 1);
+            qWarning("audio engine: %s (attempt %d); will retry", m_backend->error().c_str(), m_engineAttempts + 1);
         scheduleEngineRetry(false);
     }
     emit statusChanged();
@@ -841,11 +856,11 @@ void Controller::restartEngine() {
 }
 
 QString Controller::engineState() const {
-    if (m_engine.connected) return QStringLiteral("running");
+    if (m_backend->connected()) return QStringLiteral("running");
     return m_engineRetry.isActive() ? QStringLiteral("reconnecting") : QStringLiteral("stopped");
 }
 
-QString Controller::engineError() const { return QString::fromStdString(m_engine.error()); }
+QString Controller::engineError() const { return QString::fromStdString(m_backend->error()); }
 
 void Controller::openLogFolder() { QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(m_startup.logPath).path())); }
 
