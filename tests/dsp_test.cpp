@@ -74,6 +74,25 @@ static double clickRatio(const std::vector<float> &y, int at) {
     return maxD2(at - 64, at + 1440) / std::max(1e-9, steady);
 }
 
+// True peak (between samples) by 16x band-limited interpolation, in dBFS.
+static double truePeakDb(const std::vector<float> &y, int from) {
+    double pk = 0;
+    const int taps = 48;
+    for (int n = from + taps; n < int(y.size()) - taps; ++n)
+        for (int ph = 0; ph < 16; ++ph) {
+            const double t = ph / 16.0;
+            double acc = 0;
+            for (int k = -taps; k <= taps; ++k) {
+                const double d = k - t;
+                const double sinc = std::fabs(d) < 1e-12 ? 1.0 : std::sin(M_PI * d) / (M_PI * d);
+                const double w = 0.5 + 0.5 * std::cos(M_PI * d / (taps + 1));
+                acc += y[n + k] * sinc * w;
+            }
+            pk = std::max(pk, std::fabs(acc));
+        }
+    return linToDb(float(pk));
+}
+
 static void allOff(Params &p) {
     p.set(InputGain, 0); p.set(LowCutOn, 0); p.set(GateOn, 0); p.set(CompOn, 0);
     p.set(ToneOn, 0); p.set(LimiterOn, 0); p.set(OutputGain, 0);
@@ -423,6 +442,24 @@ int main() {
             const double r = clickRatio(out, at);
             check(r < 2.5, c.name, r);
         }
+    }
+    // ---- Phase 4: true-peak limiter (catches overs between samples).
+    {
+        // 12 kHz at 45 degrees: every sample is 3 dB below the waveform's real peak.
+        auto hf = [](double ampDb, int frames) {
+            std::vector<float> v(size_t(frames) * 2);
+            const double a = std::pow(10.0, ampDb / 20);
+            for (int i = 0; i < frames; ++i) v[2 * i] = float(a * std::sin(M_PI / 2 * i + M_PI / 4));
+            return v;
+        };
+        Params p; allOff(p); p.set(LimiterOn, 1); p.set(LimiterCeiling, -1);
+        auto out = run(p, hf(+1.0, N));            // samples at -2 dBFS, true peak +1 dBFS
+        const double tp = truePeakDb(out, N / 2);
+        check(tp <= -0.9, "true-peak limiter: no inter-sample overs above -1 dB ceiling", tp);
+        auto voice = run(p, tone(300, -6, N));       // ordinary loud speech-band signal under the ceiling
+        check(std::fabs(rmsDb(voice, N / 2, N) - (-9.01)) < 0.1, "true-peak limiter: signals under the ceiling untouched", rmsDb(voice, N / 2, N) + 9.01);
+        auto loud = run(p, tone(1000, +6, N));
+        check(truePeakDb(loud, N / 2) <= -0.9, "true-peak limiter: +6 dB over the ceiling held at -1 dB", truePeakDb(loud, N / 2));
     }
     { // Level analysis (mic test / Setup): speech vs noise floor, clipping, envelope.
         std::vector<float> x(48000 * 4);

@@ -190,6 +190,43 @@ struct SmoothBiquad {
     }
 };
 
+// Estimates the peak of the continuous waveform between samples (4x oversampling with a windowed-sinc
+// interpolator), so the limiter can catch "inter-sample" overs that would clip after conversion or
+// encoding. The estimate is delayed by kHalf samples.
+struct TruePeakDetector {
+    static constexpr int kHalf = 8, kTaps = 2 * kHalf;
+    float coef[3][kTaps] = {};
+    std::array<float, kTaps> hist{};
+    int pos = 0;
+    TruePeakDetector() {
+        for (int ph = 0; ph < 3; ++ph) {
+            const double frac = (ph + 1) / 4.0;
+            double sum = 0;
+            for (int k = 0; k < kTaps; ++k) {
+                const double d = (k - (kHalf - 1)) - frac; // distance from the interpolated point
+                const double sinc = std::fabs(d) < 1e-12 ? 1.0 : std::sin(M_PI * d) / (M_PI * d);
+                const double w = 0.42 + 0.5 * std::cos(M_PI * d / kHalf) + 0.08 * std::cos(2 * M_PI * d / kHalf);
+                coef[ph][k] = float(sinc * w);
+                sum += coef[ph][k];
+            }
+            for (int k = 0; k < kTaps; ++k) coef[ph][k] = float(coef[ph][k] / sum);
+        }
+    }
+    void reset() { hist.fill(0); pos = 0; }
+    // Push one sample; returns the largest |value| at and just after sample (now - kHalf + 1).
+    inline float process(float x) {
+        hist[size_t(pos)] = x;
+        pos = (pos + 1) % kTaps;
+        float pk = std::fabs(hist[size_t((pos + kHalf - 1) % kTaps)]); // the sample itself
+        for (int ph = 0; ph < 3; ++ph) {
+            float acc = 0;
+            for (int k = 0; k < kTaps; ++k) acc += coef[ph][k] * hist[size_t((pos + k) % kTaps)];
+            pk = std::max(pk, std::fabs(acc));
+        }
+        return pk;
+    }
+};
+
 // Crossfades a stage in and out (10 ms) when it's switched on or off, instead of cutting.
 struct StageFade {
     float mix = 0, stepSize = 1.0f / 480.0f;
@@ -299,7 +336,7 @@ public:
         deHp.reset();
         resetGate();
         compGrDb = 0; limGain = 1; limPos = 0;
-        limDelay.fill(0); limAbs.fill(0);
+        limDelay.fill(0); limAbs.fill(0); tpDet.reset();
         deEnv = 0; deRed = 0;
         nIn.fill(0); nOut.fill(0); nDry.fill(0); nPos = 0;
         al.reset(); warm.reset(); vc.reset(); dbl.reset(); echo.reset(); rev.reset();
@@ -340,7 +377,7 @@ private:
         if (fDbl.starting()) dbl.reset();
         if (fEcho.starting()) echo.reset();
         if (fRev.starting()) rev.reset();
-        if (fLim.starting()) { limGain = 1; limDelay.fill(0); limAbs.fill(0); }
+        if (fLim.starting()) { limGain = 1; limDelay.fill(0); limAbs.fill(0); tpDet.reset(); }
         if (fNoise.starting()) { nIn.fill(0); nOut.fill(0); nDry.fill(0); nPos = 0; }
     }
 
@@ -519,7 +556,9 @@ private:
             x *= outGainS.next();
             if (fLim.running()) {
                 limDelay[limPos] = x;
-                limAbs[limPos] = std::fabs(x);
+                // True peak: the detector's estimate lags by kHalf samples, so it lands kHalf slots
+                // later in the window; the window (and delay) are long enough to cover that.
+                limAbs[limPos] = std::max(std::fabs(x), tpDet.process(x));
                 limPos = (limPos + 1) & kLimMask;
                 float pk = 0;
                 for (int k = 0; k < limLookahead; ++k)
@@ -743,6 +782,7 @@ private:
     static constexpr int kLimSize = 256, kLimMask = kLimSize - 1;
     std::array<float, kLimSize> limDelay{}, limAbs{};
     int limPos = 0, limLookahead = 72;
+    TruePeakDetector tpDet;
 };
 
 } // namespace mf
