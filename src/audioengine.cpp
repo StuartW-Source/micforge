@@ -4,6 +4,7 @@
 #include <spa/param/audio/format-utils.h>
 #include <spa/utils/result.h>
 
+#include <cerrno>
 #include <cstring>
 
 namespace mf {
@@ -69,6 +70,18 @@ void onRegistryGlobal(void *d, uint32_t id, uint32_t, const char *type, uint32_t
 }
 void onRegistryRemove(void *d, uint32_t id) { static_cast<AudioEngine *>(d)->registryRemove(id); }
 
+// PipeWire reports a lost connection (daemon restarted / crashed) as an error on the core object.
+void onCoreError(void *d, uint32_t id, int, int res, const char *message) {
+    if (id == PW_ID_CORE && res == -EPIPE) static_cast<AudioEngine *>(d)->connectionLost(message);
+}
+
+const pw_core_events coreEvents = [] {
+    pw_core_events e{};
+    e.version = PW_VERSION_CORE_EVENTS;
+    e.error = onCoreError;
+    return e;
+}();
+
 const pw_registry_events registryEvents = [] {
     pw_registry_events e{};
     e.version = PW_VERSION_REGISTRY_EVENTS;
@@ -104,49 +117,113 @@ AudioEngine::AudioEngine() : scratch(16384), vmicRing(16384), monitorRing(16384)
 AudioEngine::~AudioEngine() {
     if (!loop) return;
     pw_thread_loop_lock(loop);
-    destroyMonitor();
-    destroyCapture();
-    if (vmic) pw_stream_destroy(vmic);
-    vmic = nullptr;
-    if (registry) {
-        spa_hook_remove(registryHook.get());
-        pw_proxy_destroy(reinterpret_cast<pw_proxy *>(registry));
-    }
-    if (core) pw_core_disconnect(core);
+    teardown();
     pw_thread_loop_unlock(loop);
     pw_thread_loop_stop(loop);
-    if (context) pw_context_destroy(context);
     pw_thread_loop_destroy(loop);
 }
 
-bool AudioEngine::start() {
-    loop = pw_thread_loop_new("micforge", nullptr);
-    if (!loop) return false;
-    context = pw_context_new(pw_thread_loop_get_loop(loop), nullptr, 0);
-    if (!context) return false;
-    if (pw_thread_loop_start(loop) < 0) return false;
+// Tear down everything that belongs to one PipeWire connection. Call with the loop locked.
+void AudioEngine::teardown() {
+    destroyMonitor();
+    destroyCapture();
+    if (vmic) {
+        spa_hook_remove(vmicHook.get());
+        pw_stream_destroy(vmic);
+        vmic = nullptr;
+    }
+    if (registry) {
+        spa_hook_remove(registryHook.get());
+        pw_proxy_destroy(reinterpret_cast<pw_proxy *>(registry));
+        registry = nullptr;
+    }
+    if (core) {
+        spa_hook_remove(coreHook.get());
+        pw_core_disconnect(core);
+        core = nullptr;
+    }
+    if (context) {
+        pw_context_destroy(context);
+        context = nullptr;
+    }
+    sources.clear();
+    links.clear();
+    connected = false;
+    captureRunning = false;
+    virtualMicInUse = false;
+}
 
+// Connect to PipeWire and create the streams. Safe to call again after a failure or a lost
+// connection: whatever is left of the previous connection is torn down first.
+bool AudioEngine::start() {
+    if (!loop) {
+        loop = pw_thread_loop_new("micforge", nullptr);
+        if (!loop) {
+            setError("couldn't create the audio thread");
+            return false;
+        }
+        if (pw_thread_loop_start(loop) < 0) {
+            pw_thread_loop_destroy(loop);
+            loop = nullptr;
+            setError("couldn't start the audio thread");
+            return false;
+        }
+    }
     pw_thread_loop_lock(loop);
-    core = pw_context_connect(context, nullptr, 0);
+    teardown();
+    context = pw_context_new(pw_thread_loop_get_loop(loop), nullptr, 0);
+    if (context) core = pw_context_connect(context, nullptr, 0);
     if (!core) {
+        setError("PipeWire isn't running (or isn't reachable yet)");
+        teardown();
         pw_thread_loop_unlock(loop);
+        if (onStateChanged) onStateChanged();
         return false;
     }
+    coreHook = std::make_unique<spa_hook>();
+    std::memset(coreHook.get(), 0, sizeof(spa_hook));
+    pw_core_add_listener(core, coreHook.get(), &coreEvents, this);
     connected = true;
+    setError("");
 
     registryHook = std::make_unique<spa_hook>();
     std::memset(registryHook.get(), 0, sizeof(spa_hook));
     registry = pw_core_get_registry(core, PW_VERSION_REGISTRY, 0);
     pw_registry_add_listener(registry, registryHook.get(), &registryEvents, this);
 
+    vmicPrimed = monitorPrimed = false;
+    chain.reset();
     createVirtualMic();
     if (!targetName.empty()) createCapture();
+    if (monitorOn) createMonitor();
     pw_thread_loop_unlock(loop);
+    if (onStateChanged) onStateChanged();
     return true;
 }
 
+void AudioEngine::setError(const std::string &e) {
+    std::lock_guard<std::mutex> l(errorMutex);
+    lastError = e;
+}
+
+std::string AudioEngine::error() const {
+    std::lock_guard<std::mutex> l(errorMutex);
+    return lastError;
+}
+
+// Called on the PipeWire thread when the daemon goes away. Only flags the state; the owner
+// reconnects from its own thread by calling start() again (never tear down inside a callback).
+void AudioEngine::connectionLost(const char *message) {
+    if (!connected.exchange(false)) return;
+    setError(std::string("lost the connection to PipeWire") + (message ? std::string(" (") + message + ")" : ""));
+    captureRunning = false;
+    virtualMicInUse = false;
+    if (onConnectionLost) onConnectionLost();
+    if (onStateChanged) onStateChanged();
+}
+
 void AudioEngine::setCaptureTarget(const std::string &nodeName) {
-    if (!loop) {
+    if (!loop || !core) {
         targetName = nodeName;
         return;
     }
@@ -158,9 +235,9 @@ void AudioEngine::setCaptureTarget(const std::string &nodeName) {
 }
 
 void AudioEngine::setMonitor(bool on) {
-    if (!loop) return;
-    pw_thread_loop_lock(loop);
     monitorOn = on;
+    if (!loop || !core) return;
+    pw_thread_loop_lock(loop);
     if (on && !monitor) createMonitor();
     if (!on && monitor) destroyMonitor();
     pw_thread_loop_unlock(loop);

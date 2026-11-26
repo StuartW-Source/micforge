@@ -17,6 +17,24 @@ StagePanel {
         function onMetersChanged() { root.vad = Math.max(controller.noiseVad, root.vad - 0.04) }
     }
 
+    // Shown when the optional rnnoise library isn't installed (MicForge still runs; this stage passes audio through).
+    Rectangle {
+        visible: !controller.noiseRemovalAvailable
+        Layout.fillWidth: true
+        Layout.columnSpan: root.columns
+        implicitHeight: unavailText.implicitHeight + 20
+        radius: 8
+        color: Qt.rgba(Theme.warn.r, Theme.warn.g, Theme.warn.b, 0.10)
+        border.color: Qt.rgba(Theme.warn.r, Theme.warn.g, Theme.warn.b, 0.45)
+        Text {
+            id: unavailText
+            anchors { fill: parent; margins: 10 }
+            wrapMode: Text.WordWrap
+            color: Theme.text; font.pixelSize: 12
+            text: "AI Noise Removal isn't available: the “rnnoise” package isn't installed, so this effect currently lets your audio through unchanged. Install it (sudo pacman -S rnnoise) and restart MicForge."
+        }
+    }
+
     visual: ColumnLayout {
         anchors.fill: parent
         spacing: 10

@@ -14,6 +14,8 @@
 #include <cstring>
 
 #include <algorithm>
+#include <QDesktopServices>
+#include <QUrl>
 #include <cmath>
 
 using namespace mf;
@@ -69,10 +71,18 @@ QString fmtHz(double v) { return v >= 1000 ? QString::number(v / 1000, 'f', 1) +
 
 } // namespace
 
-Controller::Controller(QObject *parent) : QObject(parent) {
+Controller::Controller(const StartupInfo &startup, QObject *parent) : QObject(parent), m_startup(startup) {
     QSettings s;
+    if (m_startup.safeMode)
+        qWarning("safe mode: using default sound settings and no plugins; nothing will be saved (%s)",
+                 qPrintable(m_startup.safeModeReason));
     for (int i = 0; i < PARAM_COUNT; ++i) {
-        const double v = s.value(QString("params/") + kParams[i].key, kParams[i].def).toDouble();
+        // Invalid or out-of-range stored values fall back to defaults instead of reaching the DSP.
+        bool ok = false;
+        double v = m_startup.safeMode ? kParams[i].def
+                                      : s.value(QString("params/") + kParams[i].key, kParams[i].def).toDouble(&ok);
+        if (!m_startup.safeMode && (!ok || !std::isfinite(v))) v = kParams[i].def;
+        v = std::clamp(v, double(kParams[i].min), double(kParams[i].max));
         m_params.insert(kParams[i].key, v);
         m_engine.params.set(i, float(v));
     }
@@ -91,6 +101,25 @@ Controller::Controller(QObject *parent) : QObject(parent) {
     m_engine.onStateChanged = [this] {
         QMetaObject::invokeMethod(this, [this] { emit statusChanged(); }, Qt::QueuedConnection);
     };
+    m_engine.onConnectionLost = [this] {
+        QMetaObject::invokeMethod(this, [this] {
+            qWarning("audio engine: %s; reconnecting", m_engine.error().c_str());
+            scheduleEngineRetry(true);
+        }, Qt::QueuedConnection);
+    };
+    m_engineRetry.setSingleShot(true);
+    connect(&m_engineRetry, &QTimer::timeout, this, &Controller::startEngine);
+
+    if (!rnnoise::available()) {
+        m_unavailable << tr("AI Noise Removal is unavailable because %1. Install the “rnnoise” package to enable it.")
+                             .arg(QString::fromStdString(rnnoise::error()));
+        qWarning("optional feature: AI noise removal unavailable: %s", rnnoise::error().c_str());
+    }
+    QString lv2Why;
+    if (!lv2Available(&lv2Why)) {
+        m_unavailable << tr("LV2 plugins are unavailable because %1. Install the “lilv” package to enable them.").arg(lv2Why);
+        qWarning("optional feature: LV2 hosting unavailable: %s", qPrintable(lv2Why));
+    }
 
     if (m_currentSource.isEmpty()) {
         const QString def = systemDefaultSource();
@@ -98,21 +127,22 @@ Controller::Controller(QObject *parent) : QObject(parent) {
             m_currentSource = def;
     }
     m_engine.setCaptureTarget(m_currentSource.toStdString());
-    m_engineOk = m_engine.start();
+    startEngine();
 
-    // Third-party plugins: restore the saved chain now, discover what's installed in the background.
+    // Third-party plugins: restore the saved chain now (not in safe mode), discover what's installed in the background.
     m_plugins = new PluginManager(&m_engine.rack, AudioEngine::kRate, this);
-    m_plugins->restore();
+    m_plugins->setReadOnly(m_startup.safeMode);
+    if (!m_startup.safeMode) m_plugins->restore();
     QTimer::singleShot(1200, m_plugins, [this] { m_plugins->rescan(); });
 
-    if (autostart() && !qEnvironmentVariableIsSet("MICFORGE_TEST")) writeAutostartEntry();
+    if (autostart() && !m_startup.safeMode && !qEnvironmentVariableIsSet("MICFORGE_TEST")) refreshAutostartEntry();
 
     m_meterTimer.setInterval(33);
     connect(&m_meterTimer, &QTimer::timeout, this, &Controller::pollMeters);
     m_meterTimer.start();
 
     // The voice-separation analysis improved since these recordings were tuned: re-tune once.
-    if (hasRecordings() && QSettings().value("calib/version", 1).toInt() < kCalibVersion)
+    if (!m_startup.safeMode && hasRecordings() && QSettings().value("calib/version", 1).toInt() < kCalibVersion)
         QTimer::singleShot(1500, this, &Controller::retuneFromRecordings);
 
     m_saveTimer.setSingleShot(true);
@@ -194,6 +224,7 @@ void Controller::addEffect(const QString &name) {
 void Controller::removeEffect(const QString &name) { setParam(name + "Added", 0); }
 
 void Controller::saveNow() {
+    if (m_startup.safeMode) return; // safe mode never overwrites the user's configuration
     QSettings s;
     for (int i = 0; i < PARAM_COUNT; ++i)
         if (i != Bypass) s.setValue(QString("params/") + kParams[i].key, m_params.value(kParams[i].key));
@@ -774,4 +805,64 @@ QVariantMap Controller::zones() const {
     z["youTilt"] = s.value("calib/youTilt").toDouble();
     z["othersTilt"] = s.value("calib/othersTilt", -200.0).toDouble();
     return z;
+}
+
+// ---------------------------------------------------------------- audio engine lifecycle
+
+void Controller::startEngine() {
+    if (m_engine.start()) {
+        if (m_engineAttempts > 0) qInfo("audio engine: connected to PipeWire after %d retries", m_engineAttempts);
+        else qInfo("audio engine: connected to PipeWire");
+        m_engineAttempts = 0; // start() already (re)created the capture stream for the chosen microphone
+    } else {
+        if (m_engineAttempts == 0 || m_engineAttempts % 10 == 0)
+            qWarning("audio engine: %s (attempt %d); will retry", m_engine.error().c_str(), m_engineAttempts + 1);
+        scheduleEngineRetry(false);
+    }
+    emit statusChanged();
+}
+
+// Reconnect with a short back-off (0.5, 1, 2, 4 s, then every 5 s) instead of a fixed start-up delay:
+// MicForge starts immediately and connects as soon as PipeWire is reachable.
+void Controller::scheduleEngineRetry(bool immediate) {
+    if (m_engineRetry.isActive()) return;
+    const int steps[] = {500, 1000, 2000, 4000, 5000};
+    const int ms = immediate ? 300 : steps[std::min(m_engineAttempts, 4)];
+    ++m_engineAttempts;
+    m_engineRetry.start(ms);
+    emit statusChanged();
+}
+
+void Controller::restartEngine() {
+    qInfo("audio engine: restart requested");
+    m_engineRetry.stop();
+    m_engineAttempts = 0;
+    startEngine();
+}
+
+QString Controller::engineState() const {
+    if (m_engine.connected) return QStringLiteral("running");
+    return m_engineRetry.isActive() ? QStringLiteral("reconnecting") : QStringLiteral("stopped");
+}
+
+QString Controller::engineError() const { return QString::fromStdString(m_engine.error()); }
+
+void Controller::openLogFolder() { QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(m_startup.logPath).path())); }
+
+void Controller::requestRestart(bool safeMode) { emit restartRequested(safeMode); }
+
+// The login entry must point at an installed MicForge. Only rewrite it when it points at a binary that no
+// longer exists, or when this binary is itself an installed copy (so a development build never hijacks it).
+void Controller::refreshAutostartEntry() {
+    const QString self = QCoreApplication::applicationFilePath();
+    const bool installed = self.startsWith("/usr/") || self.startsWith(QDir::homePath() + "/.local/bin/");
+    QString current;
+    if (QFile f(autostartPath()); f.open(QIODevice::ReadOnly))
+        for (const QByteArray &line : f.readAll().split('\n'))
+            if (line.startsWith("Exec=")) current = QString::fromUtf8(line.mid(5)).section('"', 1, 1);
+    if (current == self) return;
+    if (installed || !QFileInfo::exists(current)) {
+        qInfo("autostart: login entry now points at %s (was %s)", qPrintable(self), qPrintable(current));
+        writeAutostartEntry();
+    }
 }

@@ -44,6 +44,7 @@ public:
     Q_INVOKABLE QString text(int slot, int index, double v) const;
 
     void restore();  // load the saved chain (call once at startup)
+    void setReadOnly(bool ro) { m_readOnly = ro; } // safe mode: never overwrite the saved chain
     void save() const;
 
     // Used by "micforge --scan-vst3 <bundle>": prints the bundle's effects as JSON and returns.
@@ -81,4 +82,5 @@ private:
     QString m_scanStatus;
     int m_revision = 0;
     QTimer m_saveTimer;
+    bool m_readOnly = false;
 };

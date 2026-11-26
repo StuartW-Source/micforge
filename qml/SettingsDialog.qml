@@ -70,6 +70,35 @@ Popup {
 
         Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
+        Text { text: "TROUBLESHOOTING"; color: Theme.textFaint; font.pixelSize: 11; font.bold: true; font.letterSpacing: 1 }
+        Text {
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            color: Theme.textDim; font.pixelSize: 12
+            text: "Audio engine: " + (controller.engineOk ? "connected to PipeWire" : controller.engineState + (controller.engineError ? " (" + controller.engineError + ")" : ""))
+                  + (controller.safeMode ? "\nRunning in safe mode." : "")
+                  + "\nLog file: " + controller.logPath
+        }
+        Flow {
+            Layout.fillWidth: true
+            spacing: 8
+            PillButton { text: "Open log folder"; implicitHeight: 28; onClicked: controller.openLogFolder() }
+            PillButton { text: "Restart audio engine"; implicitHeight: 28; onClicked: controller.restartEngine() }
+            PillButton {
+                text: controller.safeMode ? "Restart normally" : "Restart in safe mode"
+                implicitHeight: 28
+                onClicked: controller.requestRestart(!controller.safeMode)
+            }
+        }
+        Text {
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            color: Theme.textFaint; font.pixelSize: 11
+            text: "Safe mode starts MicForge without your plugins and with default sound settings, and saves nothing, so a problem in your configuration can't stop MicForge from opening. You can also start it from a terminal with: micforge --safe-mode"
+        }
+
+        Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
+
         Text { text: "ABOUT"; color: Theme.textFaint; font.pixelSize: 11; font.bold: true; font.letterSpacing: 1 }
         RowLayout {
             spacing: 14

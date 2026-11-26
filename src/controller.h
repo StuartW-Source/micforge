@@ -3,6 +3,7 @@
 #include "audioengine.h"
 #include "separation.h"
 #include "pluginmanager.h"
+#include "optional/rnnoise_api.h"
 
 #include <QFutureWatcher>
 #include <QObject>
@@ -12,6 +13,15 @@
 #include <QVariantMap>
 
 #include <map>
+
+// Facts decided before the controller exists (see main.cpp / startup.cpp).
+struct StartupInfo {
+    bool safeMode = false;
+    QString safeModeReason;     // shown to the user
+    bool settingsDamaged = false;
+    QString damagedSettingsCopy;
+    QString logPath;
+};
 
 class Controller : public QObject {
     Q_OBJECT
@@ -35,6 +45,14 @@ class Controller : public QObject {
     Q_PROPERTY(qreal limReduction MEMBER m_limReduction NOTIFY metersChanged)
 
     Q_PROPERTY(bool engineOk READ engineOk NOTIFY statusChanged)
+    Q_PROPERTY(QString engineState READ engineState NOTIFY statusChanged)  // running / reconnecting / stopped
+    Q_PROPERTY(QString engineError READ engineError NOTIFY statusChanged)
+    Q_PROPERTY(bool safeMode READ safeMode CONSTANT)
+    Q_PROPERTY(QString safeModeReason READ safeModeReason CONSTANT)
+    Q_PROPERTY(QString damagedSettingsCopy READ damagedSettingsCopy CONSTANT)
+    Q_PROPERTY(QString logPath READ logPath CONSTANT)
+    Q_PROPERTY(QStringList unavailableFeatures READ unavailableFeatures CONSTANT)
+    Q_PROPERTY(bool noiseRemovalAvailable READ noiseRemovalAvailable CONSTANT)
     Q_PROPERTY(bool captureRunning READ captureRunning NOTIFY statusChanged)
     Q_PROPERTY(bool virtualMicInUse READ virtualMicInUse NOTIFY statusChanged)
 
@@ -56,7 +74,7 @@ class Controller : public QObject {
     Q_PROPERTY(bool hasRecordings READ hasRecordings NOTIFY recordingsChanged)
 
 public:
-    explicit Controller(QObject *parent = nullptr);
+    explicit Controller(const StartupInfo &startup, QObject *parent = nullptr);
     ~Controller() override;
 
     QQmlPropertyMap *params() { return &m_params; }
@@ -65,7 +83,18 @@ public:
     QString currentSource() const { return m_currentSource; }
     void setCurrentSource(const QString &name);
 
-    bool engineOk() const { return m_engineOk; }
+    bool engineOk() const { return m_engine.connected; }
+    QString engineState() const;
+    QString engineError() const;
+    bool safeMode() const { return m_startup.safeMode; }
+    QString safeModeReason() const { return m_startup.safeModeReason; }
+    QString damagedSettingsCopy() const { return m_startup.damagedSettingsCopy; }
+    QString logPath() const { return m_startup.logPath; }
+    QStringList unavailableFeatures() const { return m_unavailable; }
+    bool noiseRemovalAvailable() const { return mf::rnnoise::available(); }
+    Q_INVOKABLE void restartEngine();
+    Q_INVOKABLE void openLogFolder();
+    Q_INVOKABLE void requestRestart(bool safeMode); // relaunch MicForge (normally or in safe mode)
     bool captureRunning() const { return m_engine.captureRunning; }
     bool virtualMicInUse() const { return m_engine.virtualMicInUse; }
 
@@ -119,11 +148,15 @@ signals:
     void presetsChanged();
     void calibChanged();
     void zonesChanged();
+    void restartRequested(bool safeMode);
     void recordingsChanged();
 
 private:
     void pollMeters();
     void writeAutostartEntry();
+    void refreshAutostartEntry();
+    void startEngine();
+    void scheduleEngineRetry(bool immediate);
     void onParamEdited(const QString &key, const QVariant &value);
     void applyToEngine(int id, double value);
     void updateSources(const std::vector<mf::SourceInfo> &list);
@@ -141,7 +174,10 @@ private:
     QVariantList m_sources;
     QString m_currentSource;
     QString m_currentPreset;
-    bool m_engineOk = false;
+    StartupInfo m_startup;
+    QStringList m_unavailable;
+    QTimer m_engineRetry;
+    int m_engineAttempts = 0;
     bool m_monitor = false;
     bool m_showWelcome = true;
 

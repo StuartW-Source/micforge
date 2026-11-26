@@ -155,7 +155,8 @@ ApplicationWindow {
                 height: 30
                 implicitWidth: statusRow.implicitWidth + 24
                 radius: 15
-                readonly property color c: !controller.engineOk ? Theme.danger
+                readonly property color c: controller.engineState === "reconnecting" ? Theme.warn
+                                           : !controller.engineOk ? Theme.danger
                                            : !controller.captureRunning ? Theme.warn
                                            : controller.virtualMicInUse ? Theme.gate : Theme.input
                 color: Qt.rgba(c.r, c.g, c.b, 0.12)
@@ -178,7 +179,8 @@ ApplicationWindow {
                     Text {
                         color: Theme.text
                         font.pixelSize: 12
-                        text: !controller.engineOk ? "Can't connect to PipeWire"
+                        text: controller.engineState === "reconnecting" ? "Connecting to PipeWire…"
+                            : !controller.engineOk ? "Audio engine stopped: " + controller.engineError
                             : !controller.captureRunning ? "Waiting for microphone…"
                             : controller.virtualMicInUse ? "Live · an app is using MicForge"
                             : "Ready · pick “MicForge” as your mic in Discord, OBS or any app"
@@ -201,6 +203,7 @@ ApplicationWindow {
                 icon: "✦"
                 primary: true
                 accent: Theme.gate
+                enabled: !controller.safeMode // setup saves calibration; safe mode never writes
                 onClicked: { controller.cancelCalibration(); voiceSetup.open() }
             }
             PillButton {
@@ -288,6 +291,48 @@ ApplicationWindow {
                     color: Theme.textDim
                     font.pixelSize: 14
                     MouseArea { anchors.fill: parent; anchors.margins: -6; cursorShape: Qt.PointingHandCursor; onClicked: controller.showWelcome = false }
+                }
+            }
+        }
+
+        // Start-up notices: safe mode, damaged settings, missing optional libraries, engine problems.
+        Repeater {
+            model: {
+                var n = []
+                if (controller.safeMode)
+                    n.push({ kind: "warn", text: controller.safeModeReason + " Your plugins and saved sound settings aren't loaded, and nothing you change now is saved. Your configuration is untouched.", action: "Restart normally" })
+                if (controller.damagedSettingsCopy !== "")
+                    n.push({ kind: "danger", text: "Your settings file couldn't be read, so defaults are in use. A copy of the damaged file was kept at " + controller.damagedSettingsCopy + ".", action: "" })
+                if (controller.engineState === "reconnecting" && controller.engineError !== "")
+                    n.push({ kind: "warn", text: "Waiting for the audio system: " + controller.engineError + ". MicForge will connect automatically.", action: "Retry now" })
+                for (var i = 0; i < controller.unavailableFeatures.length; ++i)
+                    n.push({ kind: "info", text: controller.unavailableFeatures[i], action: "" })
+                return n
+            }
+            Rectangle {
+                Layout.fillWidth: true
+                implicitHeight: noticeRow.implicitHeight + 16
+                radius: 8
+                readonly property color c: modelData.kind === "danger" ? Theme.danger : modelData.kind === "warn" ? Theme.warn : Theme.input
+                color: Qt.rgba(c.r, c.g, c.b, 0.10)
+                border.color: Qt.rgba(c.r, c.g, c.b, 0.45)
+                RowLayout {
+                    id: noticeRow
+                    anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: 14; rightMargin: 8 }
+                    spacing: 12
+                    Text {
+                        Layout.fillWidth: true
+                        text: modelData.text
+                        color: Theme.text
+                        font.pixelSize: 12
+                        wrapMode: Text.WordWrap
+                    }
+                    PillButton {
+                        visible: modelData.action !== ""
+                        text: modelData.action
+                        implicitHeight: 28
+                        onClicked: modelData.action === "Retry now" ? controller.restartEngine() : controller.requestRestart(false)
+                    }
                 }
             }
         }

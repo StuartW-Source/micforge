@@ -54,7 +54,8 @@ public:
     AudioEngine();
     ~AudioEngine();
 
-    bool start();
+    bool start();               // connect (or reconnect) to PipeWire; false if it isn't available yet
+    std::string error() const;   // human-readable reason for the last failure ("" when connected)
     void setCaptureTarget(const std::string &nodeName);
     void setMonitor(bool on);
 
@@ -66,6 +67,7 @@ public:
     // Called from the PipeWire thread; the receiver must marshal to its own thread.
     std::function<void(std::vector<SourceInfo>)> onSourcesChanged;
     std::function<void()> onStateChanged;
+    std::function<void()> onConnectionLost; // PipeWire went away: owner should call start() again (from its thread)
 
     // Status snapshot (safe to read from any thread).
     std::atomic<bool> captureRunning{false};
@@ -80,8 +82,10 @@ public:
     void registryRemove(uint32_t id);
     void captureState(int state);
     void virtualMicState(int state);
+    void connectionLost(const char *message);
 
 private:
+    void teardown();
     void createCapture();
     void destroyCapture();
     void createVirtualMic();
@@ -97,8 +101,11 @@ private:
     pw_stream *capture = nullptr;
     pw_stream *vmic = nullptr;
     pw_stream *monitor = nullptr;
-    std::unique_ptr<spa_hook> registryHook, captureHook, vmicHook, monitorHook;
+    std::unique_ptr<spa_hook> coreHook, registryHook, captureHook, vmicHook, monitorHook;
 
+    void setError(const std::string &e);
+    mutable std::mutex errorMutex; // guards lastError (written on the PipeWire thread, read on the UI thread; never the RT callback)
+    std::string lastError;
     std::string targetName;
     bool targetMissing = false;
     std::map<uint32_t, SourceInfo> sources;

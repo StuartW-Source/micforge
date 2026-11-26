@@ -1,5 +1,5 @@
 // Offline sanity test for the voice chain: feeds synthetic signals and checks behaviour.
-// Build: g++ -std=c++20 -O2 -I../src dsp_test.cpp -lrnnoise -o dsp_test && ./dsp_test
+// Build: g++ -std=c++20 -O2 -Isrc tests/dsp_test.cpp src/optional/rnnoise_api.cpp -ldl -o dsp_test && ./dsp_test
 #include "dsp.h"
 #include "separation.h"
 
@@ -141,7 +141,9 @@ int main() {
         auto out = run(p, tone(1000, -20, N));
         check(std::fabs(rmsDb(out, N / 2, N) + 23.01 - 6) < 0.2, "EQ: +6 dB bell at 1 kHz", rmsDb(out, N / 2, N) + 23.01);
     }
-    { // RNNoise runs, adds a 10 ms frame of delay, output finite; white noise is reduced.
+    if (!mf::rnnoise::available()) {
+        std::printf("[SKIP] AI noise removal tests: %s\n", mf::rnnoise::error().c_str());
+    } else { // RNNoise runs, adds a 10 ms frame of delay, output finite; white noise is reduced.
         Params p; allOff(p); p.set(NoiseAdded, 1); p.set(NoiseOn, 1);
         std::vector<float> in(N * 2);
         uint32_t s = 1;

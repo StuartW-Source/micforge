@@ -262,6 +262,7 @@ QString PluginManager::text(int slot, int index, double v) const {
 // ---------------------------------------------------------------- persistence
 
 void PluginManager::save() const {
+    if (m_readOnly) return;
     QJsonArray arr;
     for (const auto &e : m_entries) {
         QJsonObject o = QJsonObject::fromVariantMap(e.info.toMap());

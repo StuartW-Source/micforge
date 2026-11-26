@@ -4,7 +4,7 @@
 
 #include "params.h"
 
-#include <rnnoise.h>
+#include "optional/rnnoise_api.h" // loaded at run time (optional dependency)
 
 #include <algorithm>
 #include <array>
@@ -209,10 +209,10 @@ struct TiltDetector {
 class VoiceChain {
 public:
     explicit VoiceChain(float sampleRate = 48000) : fs(sampleRate), rev(sampleRate) {
-        denoise = rnnoise_create(nullptr);
+        denoise = mf::rnnoise::create(); // nullptr if rnnoise isn't installed: the stage passes audio through
     }
     ~VoiceChain() {
-        if (denoise) rnnoise_destroy(denoise);
+        mf::rnnoise::destroy(denoise);
     }
     VoiceChain(const VoiceChain &) = delete;
     VoiceChain &operator=(const VoiceChain &) = delete;
@@ -281,7 +281,7 @@ public:
                 x = dry + (wet - dry) * noiseMix;
                 if (++nPos == kNoiseFrame) {
                     nPos = 0;
-                    lastVad = rnnoise_process_frame(denoise, nOut.data(), nIn.data());
+                    lastVad = mf::rnnoise::processFrame(denoise, nOut.data(), nIn.data());
                 }
                 vadMax = std::max(vadMax, lastVad);
             }

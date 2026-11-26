@@ -1,7 +1,7 @@
 // LV2 plugin hosting with lilv.
 #include "plugins.h"
 
-#include <lilv/lilv.h>
+#include "optional/lilv_api.h" // lilv is loaded at run time (optional dependency)
 #include <lv2/atom/atom.h>
 #include <lv2/buf-size/buf-size.h>
 #include <lv2/core/lv2.h>
@@ -263,8 +263,16 @@ private:
 
 } // namespace
 
+bool lv2Available(QString *why) {
+    std::string err;
+    const bool ok = lilvapi::load(&err);
+    if (!ok && why) *why = QString::fromStdString(err);
+    return ok;
+}
+
 std::vector<PluginInfo> scanLv2() {
     std::vector<PluginInfo> out;
+    if (!lv2Available(nullptr)) return out;
     Node audio(LV2_CORE__AudioPort), input(LV2_CORE__InputPort), output(LV2_CORE__OutputPort);
     const LilvPlugins *all = lilv_world_get_all_plugins(world());
     LILV_FOREACH (plugins, i, all) {
@@ -289,6 +297,11 @@ std::vector<PluginInfo> scanLv2() {
 }
 
 std::unique_ptr<PluginInstance> createLv2(const PluginInfo &info, double fs, int maxBlock, QString *error) {
+    QString why;
+    if (!lv2Available(&why)) {
+        if (error) *error = "can't be loaded because " + why;
+        return nullptr;
+    }
     const LilvPlugin *p = findPlugin(info.id);
     if (!p) {
         if (error) *error = "is not installed any more";
