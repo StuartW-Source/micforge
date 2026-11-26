@@ -1,8 +1,8 @@
 # MicForge roadmap
 
 Living document. Phases follow the development brief; each phase needs approval before it starts.
-Status: **Phase 1 complete (pending a real reboot/login confirmation by the user). Phase 2 complete
-(`phase2-architecture-ui`). Phase 3 complete on branch `phase3-diagnostics`. Phase 4 awaiting approval.**
+Status: **Phases 1-3 complete (reboot/login autostart confirmed 2026-11-26). Phase 4 complete on branch
+`phase4-dsp`. Phase 5 awaiting approval.**
 
 ---
 
@@ -54,7 +54,8 @@ logging and correct session ordering. A separate systemd unit would compete with
 matches how the user toggles it in System Settings, and maps cleanly onto Windows' per-user startup.
 There are no arbitrary start-up delays: PipeWire and tray readiness are handled reactively.
 
-**Still to confirm by the user:** a real logout/login and a reboot (cannot be performed from this session).
+**Confirmed 2026-11-26:** after a reboot (19:06) MicForge started at login by itself (19:07, minimized
+login launch, ready in 2 s), per the user's log.
 
 ### Audit findings (whole repository, 2026-11-26)
 
@@ -139,10 +140,26 @@ Not verified: the Setup results screen with the new level rows (needs a real Set
 the room), the save-file and folder dialogs (portal dialogs can't run offscreen), playback audibility on
 real speakers.
 
-### Phase 4 — Voice isolation and DSP
-Gate decision explanation ("opened: level + closeness"), detector spectrum view, adaptive noise floor,
-whisper handling, VAD (rnnoise VAD output) as an optional input, parameter smoothing everywhere, true-peak
-limiter, hum removal (50/60 Hz), plosive and breath reduction. Each must beat the current behaviour in tests.
+### Phase 4 — Voice isolation and DSP ✅ (2026-11-26)
+
+Method: each test was written first and run against the previous code (a copy of the old `src/`), then
+the change was made until it passed. Numbers are from `tests/dsp_test.cpp`.
+
+| Item | Before → after |
+|---|---|
+| Parameter smoothing everywhere (gains, filters, stage on/off, Compare, effect settings) | click ratio 3.6–41 → 0.8–1.2 (EQ changes were already smooth). CPU 0.23 % → 0.28 % of a core |
+| True-peak limiter (4× oversampled detection, no extra latency) | inter-sample peak +1.0 dBFS over a −1 dB ceiling → −1.0 dBFS |
+| Adaptive noise floor (default on) | fan noise above the threshold: 0 dB removed → 27.8 dB; speech, continuous speech, sustained vowel unaffected |
+| Gate decision explanation | new: reason (too quiet / background noise / not a voice / not close enough / open) in the panel and Overview |
+| AI voice detector as a gate input (opt-in) | typing 1–2 s after speech: 0 dB → 9.3 dB (90 %) / 29.9 dB (95 %). rnnoise keeps reporting speech ~1 s after talking stops; documented. The default's 6 dB bar was set after measuring. On the user's own recordings (local only), speech lost 0.10 dB |
+| Hum Removal (new effect; auto 50/60 Hz) | worst hum harmonic with Low Cut alone −37 dB → −143 dB; voice change 0.00 dB |
+| Plosive guard (Low Cut option, default on) | pop bass peak −13.8 → −23.4 dB; a loud bass-heavy voice unchanged. Trigger margin: the user's real voice peaks 5 dB below it |
+| Breath reduction (experimental, opt-in) | 450 ms breath: 0 → 3.7 dB; s/h/voiced untouched. The 6 dB target needs look-ahead; not added |
+| Detector spectrum view | new: live spectrum, listening band, Setup recordings' spectra |
+| Whisper handling | **Deferred.** Whispers have no pitch and no proximity bass, so the signal alone can't tell the user's whisper from someone else's whisper or from typing. It needs a whisper step in Setup and probably speaker features (Phase 6). Breath reduction stays off by default because it would turn whispers down. |
+
+Not verified: how the adaptive floor and plosive guard behave across many real rooms and voices (synthetic
+tests plus one user's recordings); the voice detector on voices other than the user's.
 
 ### Phase 5 — Presets, profiles, shortcuts, plugins
 Versioned preset files (import/export, cross-platform), device profiles, undo/redo, backups.

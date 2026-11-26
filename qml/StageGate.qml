@@ -74,7 +74,12 @@ StagePanel {
                 }
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: !root.active ? "gate bypassed" : gateLight.lit ? "you're talking" : "mic muted"
+                    text: !root.active ? "gate bypassed"
+                        : gateLight.lit ? (root.p.gateCloseCheck > 0.5 ? "loud + close enough" : "loud enough")
+                        : controller.gateReason === "far" ? "not close enough"
+                        : controller.gateReason === "notvoice" ? "not a voice"
+                        : controller.gateReason === "noise" ? "background noise"
+                        : "too quiet"
                     color: Theme.textFaint
                     font.pixelSize: 11
                 }
@@ -208,6 +213,72 @@ StagePanel {
         Layout.fillWidth: true
         Layout.columnSpan: root.columns
         spacing: 6
+        // Why the gate is doing what it does, in one plain sentence.
+        Text {
+            Layout.fillWidth: true
+            Layout.bottomMargin: 6
+            visible: root.active
+            wrapMode: Text.WordWrap
+            color: controller.gateReason === "far" || controller.gateReason === "noise" ? Theme.text : Theme.textDim
+            font.pixelSize: 12
+            text: {
+                var thr = Theme.fmtDb(controller.gateOpenAt > -119 ? controller.gateOpenAt : root.p.gateThreshold)
+                // Open/closed comes from the same light as the box above; the reason explains a closed gate.
+                switch (gateLight.lit ? "open" : controller.gateReason) {
+                case "open": return "Why it's open: the sound is above " + thr + (root.p.gateCloseCheck > 0.5 ? " and sounds close to the mic." : ".")
+                case "far": return "Why it's closed: loud enough, but it doesn't sound close to the mic (another voice, or a speaker)."
+                case "notvoice": return "Why it's closed: loud enough, but the AI voice detector doesn't hear speech (typing, clicks, music…)."
+                case "noise": return "Why it's closed: steady background noise at about " + Theme.fmtDb(controller.gateFloor) + ", so the gate now opens above " + thr + " instead of " + Theme.fmtDb(root.p.gateThreshold) + "."
+                default: return "Why it's closed: nothing is above " + thr + "."
+                    + (controller.gateFloor > -119 && root.p.gateAdaptive > 0.5 ? " Background noise: about " + Theme.fmtDb(controller.gateFloor) + "." : "")
+                }
+            }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.bottomMargin: 6
+            spacing: 10
+            ToggleSwitch { paramKey: "gateAdaptive"; accent: Theme.gate; label: "Ignore steady background noise" }
+            Text { text: "Ignore steady background noise"; color: Theme.text; font.pixelSize: 12 }
+            HelpButton { text: "If a fan, air conditioning or other steady noise gets louder than the gate's threshold, the gate raises its threshold just above it, so the noise stays out and your voice still opens it. It only reacts to sound that stays steady in the gaps between your words for a few seconds, so your voice is never mistaken for noise." }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.bottomMargin: 6
+            spacing: 10
+            opacity: controller.noiseRemovalAvailable ? 1 : 0.5
+            ToggleSwitch { paramKey: "gateVad"; accent: Theme.gate; enabled: controller.noiseRemovalAvailable; label: "Only open for speech" }
+            Text { text: "Only open for speech (AI voice detector)"; color: Theme.text; font.pixelSize: 12 }
+            HelpButton { text: "The gate also asks the AI voice detector (the one Noise Removal uses) whether it hears speech. Typing, clicks, music and other non-speech sounds stay out even when they're loud. It doesn't tell your voice from other people's (that's the closeness check's job).\n\nIt adds 20 ms of delay, and for about a second after you stop talking it still counts as speech, so a keystroke right after a sentence can slip through." }
+            Text { visible: !controller.noiseRemovalAvailable; text: "needs rnnoise"; color: Theme.textFaint; font.pixelSize: 11 }
+        }
+        ParamSlider {
+            visible: root.p.gateVad > 0.5 && controller.noiseRemovalAvailable
+            Layout.fillWidth: true
+            Layout.maximumWidth: 460
+            Layout.bottomMargin: 6
+            paramKey: "gateVadThreshold"; label: "Speech certainty needed"; from: 10; to: 99; stepSize: 1
+            accent: Theme.gate
+            help: "How sure the detector must be that it hears speech. Higher keeps out more typing and noise; if the start of your words gets cut, lower it."
+            format: function(v) { return Math.round(v) + "%" }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.bottomMargin: 6
+            spacing: 10
+            ToggleSwitch { paramKey: "breathOn"; accent: Theme.gate; label: "Reduce breaths" }
+            Text { text: "Reduce breaths (experimental)"; color: Theme.text; font.pixelSize: 12 }
+            HelpButton { text: "Turns down breaths between your sentences. It waits until a sound has been breath-like (no pitch, no hiss, well below your voice) for about a sixth of a second, so short sounds inside words (h, f, t) are never touched, but the start of each breath still passes.\n\nWhispering has no pitch either: leave this off if you whisper." }
+        }
+        ParamSlider {
+            visible: root.p.breathOn > 0.5
+            Layout.fillWidth: true
+            Layout.maximumWidth: 460
+            Layout.bottomMargin: 6
+            paramKey: "breathAmount"; label: "Turn breaths down by"; from: 3; to: 30; stepSize: 1
+            accent: Theme.gate
+            format: function(v) { return Math.round(v) + " dB" }
+        }
         Text { text: "When you're not talking"; color: Theme.textDim; font.pixelSize: 12 }
         Segmented {
             Layout.fillWidth: true

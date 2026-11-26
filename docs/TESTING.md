@@ -59,6 +59,14 @@ exercise Setup profiles).
   the CMake build (cmake not installed), keyboard traversal by hand, live desktop theme switching,
   fractional scaling.
 
+- 2026-11-26: reboot/login autostart confirmed from the user's log (boot 19:06:49, login launch 19:07:09,
+  ready 19:07:11).
+- 2026-11-26 (Phase 4): tests written first and run against a copy of the previous `src/` (baseline),
+  then against the new code; results in ROADMAP Phase 4. ctest 7/7. Benchmarks (default chain, 60 s):
+  0.23 % → 0.52 % of one core. Screenshots: Voice Gate panel (dark/light, 860×600, 1400×880), Hum
+  Removal and Low Cut panels, Effect Library, spectrum with synthetic Setup recordings (removed after).
+  The user's own Setup recordings were used locally, read-only, to check the voice detector and the
+  plosive margin; nothing was copied or committed.
 - 2026-11-26 (Phase 3): CMake build verified; ctest 7/7 (dsp incl. level analysis, audiocore 16,
   privacy 7, calibprofiles 13, autostart, startup 9/9, reconnect 3/3); qmake build still works. A real
   report from the test instance contained no user name, computer name, home path or device names.

@@ -38,6 +38,8 @@ ApplicationWindow {
         { id: "input",     title: "Input",          accent: Theme.input,  enable: "",            optional: "",          file: "StageInput.qml" },
         { id: "noise",     title: "Noise Removal",  accent: Theme.noise,    enable: "noiseOn",     optional: "noise",     file: "StageNoise.qml",
           group: "Clean up", glyph: "≋", blurb: "AI removes fans, keyboard clicks and hum while you talk." },
+        { id: "hum",       title: "Hum Removal",    accent: Theme.hum,      enable: "humOn",       optional: "hum",       file: "StageHum.qml",
+          group: "Clean up", glyph: "ϟ", blurb: "Removes electrical hum (50/60 Hz buzz) from cables, chargers and ground loops." },
         { id: "lowcut",    title: "Low Cut",        accent: Theme.lowcut, enable: "lowCutOn",    optional: "lowCut",    file: "StageLowCut.qml",
           group: "Clean up", glyph: "⌒", blurb: "Removes rumble, desk bumps and boom." },
         { id: "gate",      title: "Voice Gate",     accent: Theme.gate,   enable: "gateOn",      optional: "gate",      file: "StageGate.qml",
@@ -78,7 +80,8 @@ ApplicationWindow {
         switch (id) {
         case "input": return Theme.fmtDb(p.inputGain) + " · " + ["In 1", "In 2", "Both"][Math.round(p.inputChannel)]
         case "noise": return Math.round(p.noiseAmount) + "% · voice " + Math.round(controller.noiseVad * 100) + "%"
-        case "lowcut": return Theme.fmtHz(p.lowCutFreq)
+        case "hum": return controller.humBase > 0 ? controller.humBase + " Hz × " + Math.round(p.humHarmonics) : "listening…"
+        case "lowcut": return Theme.fmtHz(p.lowCutFreq) + (p.lowCutPlosive > 0.5 ? " · pops" : "")
         case "gate": return (controller.gateOpen ? "OPEN" : "closed") + (p.gateMode > 0.5 ? " · soft" : "")
         case "comp": return "−" + controller.compReduction.toFixed(1) + " dB"
         case "deess": return "−" + controller.deessReduction.toFixed(1) + " dB"

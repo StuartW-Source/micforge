@@ -92,7 +92,7 @@ target_link_libraries(vst3host PUBLIC ${CMAKE_DL_LIBS})
 
 # ---------------------------------------------------------------- application
 add_executable(micforge
-    src/main.cpp src/startup.cpp src/controller.cpp src/pluginmanager.cpp src/diagnostics.cpp src/mictest.cpp src/calibprofiles.cpp
+    src/main.cpp src/startup.cpp src/controller.cpp src/pluginmanager.cpp src/diagnostics.cpp src/mictest.cpp src/calibprofiles.cpp src/detectorspectrum.cpp
     src/audio/audiocore.cpp src/audio/pipewirebackend.cpp
     src/plugins/plugins.cpp src/plugins/vst3host.cpp
     src/optional/rnnoise_api.cpp

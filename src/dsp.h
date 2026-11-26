@@ -45,7 +45,14 @@ struct Meters {
     std::atomic<float> gateLevel{-120};    // gate detector level, dB
     std::atomic<float> gateReduction{0};   // dB of attenuation (positive)
     std::atomic<float> gateOpen{0};        // 1 if open at any point
-    std::atomic<float> gateTilt{-120};     // closeness (bass minus treble, dB) of current sound; -120 = silence
+    std::atomic<float> gateTilt{-120};
+    // Why the gate is open or closed (highest during the block): 0 = gate off, 1 = closed: too quiet,
+    // 2 = closed: steady background noise raised the threshold, 3 = closed: not a voice (AI voice
+    // detector), 4 = closed: loud enough but not close enough, 5 = open.
+    std::atomic<int> gateReason{0};
+    std::atomic<float> gateFloor{-120};    // steady background level the gate measured, dB (-120 = none)
+    std::atomic<float> gateOpenAt{-120};
+    std::atomic<float> humBase{0};         // mains frequency Hum Removal is working on (0 = none yet)   // threshold in use (raised above the setting by background noise)     // closeness (bass minus treble, dB) of current sound; -120 = silence
     std::atomic<float> compLevel{-120};    // compressor detector input, dB
     std::atomic<float> compReduction{0};   // dB (positive)
     std::atomic<float> deessReduction{0};  // dB (positive)
@@ -76,7 +83,7 @@ struct Recorder {
 };
 
 struct Biquad {
-    enum Type { LP, HP, Peak, LowShelf, HighShelf };
+    enum Type { LP, HP, Peak, LowShelf, HighShelf, Notch };
     double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
     double z1 = 0, z2 = 0;
 
@@ -107,6 +114,10 @@ struct Biquad {
         case Peak:
             B0 = 1 + al * A; B1 = -2 * cw; B2 = 1 - al * A;
             A0 = 1 + al / A; A1 = -2 * cw; A2 = 1 - al / A;
+            break;
+        case Notch:
+            B0 = 1; B1 = -2 * cw; B2 = 1;
+            A0 = 1 + al; A1 = -2 * cw; A2 = 1 - al;
             break;
         case LowShelf: {
             const double s = 2 * std::sqrt(A) * al;
@@ -227,6 +238,158 @@ struct TruePeakDetector {
     }
 };
 
+// Removes mains hum: narrow notches (3 Hz wide) on 50 or 60 Hz and its harmonics. In automatic mode it
+// only commits to 50 or 60 Hz when those frequencies are narrow, steady peaks (hum), checked over two
+// consecutive seconds, so a voice's own harmonics (which wander in pitch) can't trigger it.
+struct HumRemover {
+    static constexpr int kMax = 10;
+    SmoothBiquad notch[kMax];
+    float fs = 48000, base = 0;     // 0 = not detected yet (automatic mode): passes audio through
+    int harmonics = 6, mode = 0;    // mode: 0 auto, 1 = 50 Hz, 2 = 60 Hz
+    // Detection: Goertzel at k*f and k*f +- 8 Hz for k = 1..3, f = 50/60, over 1 s blocks.
+    struct G { double c = 0, s1 = 0, s2 = 0; void set(double hz, double fs) { c = 2 * std::cos(2 * M_PI * hz / fs); } inline void push(float x) { const double s0 = x + c * s1 - s2; s2 = s1; s1 = s0; } double power() const { return s1 * s1 + s2 * s2 - c * s1 * s2; } void clear() { s1 = s2 = 0; } };
+    G g[2][3][3]; // [50/60][harmonic][centre, below, above]
+    int count = 0, lastWinner = 0;
+
+    void configure(float sampleRate, int freqMode, int harm, bool jump) {
+        fs = sampleRate; harmonics = std::clamp(harm, 1, kMax); mode = freqMode;
+        for (int b = 0; b < 2; ++b)
+            for (int k = 0; k < 3; ++k) {
+                const double f = (b ? 60.0 : 50.0) * (k + 1);
+                g[b][k][0].set(f, fs); g[b][k][1].set(f - 8, fs); g[b][k][2].set(f + 8, fs);
+            }
+        if (mode == 1) setBase(50, jump);
+        else if (mode == 2) setBase(60, jump);
+    }
+    void setBase(float f, bool jump) {
+        const bool first = base == 0;
+        base = f;
+        for (int k = 0; k < kMax; ++k) {
+            const double hz = f * (k + 1);
+            notch[k].set(Biquad::Notch, fs, hz, hz / 3.0, 0, jump || first);
+        }
+    }
+    void reset() { for (auto &n : notch) n.reset(); for (auto &a : g) for (auto &b : a) for (auto &c : b) c.clear(); count = 0; }
+    void detect(float x) {
+        for (auto &a : g) for (auto &b : a) for (auto &c : b) c.push(x);
+        if (++count < int(fs)) return;
+        count = 0;
+        int winner = 0;
+        double best = 0;
+        for (int b = 0; b < 2; ++b) {
+            int peaky = 0;
+            double e = 0;
+            for (int k = 0; k < 3; ++k) {
+                const double c = g[b][k][0].power(), side = 0.5 * (g[b][k][1].power() + g[b][k][2].power());
+                if (c > 10.0 * side && c > 1e-3) ++peaky; // 10 dB above its neighbours, and audible (about -70 dBFS)
+                e += c;
+            }
+            if (peaky >= 2 && e > best) { best = e; winner = b ? 60 : 50; }
+        }
+        for (auto &a : g) for (auto &b : a) for (auto &c : b) c.clear();
+        if (winner && winner == lastWinner && winner != int(base)) setBase(float(winner), false);
+        lastWinner = winner;
+    }
+    inline float process(float x) {
+        if (mode == 0) detect(x);
+        if (base == 0) return x;
+        for (int k = 0; k < harmonics; ++k) x = notch[k].process(x);
+        return x;
+    }
+};
+
+// Plosive guard: a "p" or "b" close to the mic hits it with a burst of very low frequencies. When the
+// energy below ~120 Hz jumps 6+ dB above the voice band (300 Hz-3 kHz; a real close voice measured at
+// most +1 dB), a low shelf at 200 Hz
+// dips quickly (2 ms) and recovers (80 ms). A bass-heavy voice never has that much more sub-bass than
+// voice-band energy, so it isn't touched.
+struct PlosiveGuard {
+    Biquad lfLp, midHp, midLp, shelf;
+    float lfEnv = 0, midEnv = 0, red = 0, shelfDb = 0, aEnv = 0, rEnv = 0, aRed = 0, rRed = 0, fs = 48000;
+    int tick = 0;
+    void configure(float sampleRate) {
+        fs = sampleRate;
+        lfLp.set(Biquad::LP, fs, 120, 0.7071);
+        midHp.set(Biquad::HP, fs, 300, 0.7071);
+        midLp.set(Biquad::LP, fs, 3000, 0.7071);
+        aEnv = onePole(1.0f, fs); rEnv = onePole(50.0f, fs);
+        aRed = onePole(2.0f, fs); rRed = onePole(80.0f, fs);
+        shelf.set(Biquad::LowShelf, fs, 200, 0.7071, -shelfDb);
+    }
+    void reset() { lfLp.reset(); midHp.reset(); midLp.reset(); shelf.reset(); lfEnv = midEnv = red = shelfDb = 0; }
+    static inline void follow(float &env, float a, float att, float rel) { env = a > env ? att * env + (1 - att) * a : rel * env + (1 - rel) * a; }
+    inline float process(float x) {
+        follow(lfEnv, std::fabs(lfLp.process(x)), aEnv, rEnv);
+        follow(midEnv, std::fabs(midLp.process(midHp.process(x))), aEnv, rEnv);
+        const float ratio = linToDb(lfEnv) - linToDb(midEnv);
+        const float want = linToDb(lfEnv) > -35.0f ? std::clamp((ratio - 6.0f) * 4.0f, 0.0f, 24.0f) : 0.0f;
+        red = want > red ? want + (red - want) * aRed : want + (red - want) * rRed;
+        if ((++tick & 15) == 0 && std::fabs(red - shelfDb) > 0.1f) {
+            shelfDb = red;
+            shelf.set(Biquad::LowShelf, fs, 200, 0.7071, -shelfDb);
+        }
+        return shelfDb > 0.05f ? shelf.process(x) : x;
+    }
+};
+
+// Breath reduction. Every 20 ms it checks the sound for pitch (autocorrelation at 70-400 Hz on a 12 kHz
+// copy), for hiss ("s": energy above 4.5 kHz) and for level against your recent speech. A breath is
+// unpitched, not hissy, at least 10 dB below your speech, and lasts: after 160 ms of that in a row the
+// sound is turned down (20 ms fade), and any pitched sound brings it straight back. Short unpitched sounds
+// inside words ("h", "f", "t", under 160 ms) are never touched. Whispers are unpitched too, so this is
+// opt-in. The first 160 ms of a breath pass (no extra delay is added to detect it).
+struct BreathReducer {
+    static constexpr int kFrame = 960, kDec = 4, kDecFrame = kFrame / kDec, kRunFrames = 8;
+    Biquad aa, hp; // anti-alias for the 12 kHz copy; 4.5 kHz high-pass for hiss
+    std::array<float, kDecFrame> dec{};
+    int pos = 0, decPos = 0, run = 0;
+    double eAll = 0, eHi = 0;
+    float speechDb = -120, gain = 1, target = 1, depth = 0.25f, kGain = 0.001f, fs = 48000;
+    void configure(float sampleRate, float amountDb) {
+        fs = sampleRate;
+        aa.set(Biquad::LP, fs, 3000, 0.7071);
+        hp.set(Biquad::HP, fs, 4500, 0.7071);
+        depth = dbToLin(-amountDb);
+        kGain = 1.0f - onePole(20.0f, fs);
+    }
+    void reset() { aa.reset(); hp.reset(); pos = decPos = run = 0; eAll = eHi = 0; gain = target = 1; speechDb = -120; }
+    // Normalised autocorrelation peak over pitch lags (0 = noise, 1 = perfectly periodic).
+    float periodicity() const {
+        double e0 = 0;
+        for (float v : dec) e0 += double(v) * v;
+        if (e0 < 1e-12) return 0;
+        float best = 0;
+        for (int lag = 12000 / 400; lag <= 12000 / 70; ++lag) {
+            double c = 0, e1 = 0, e2 = 0;
+            for (int k = 0; k + lag < kDecFrame; ++k) { c += double(dec[size_t(k)]) * dec[size_t(k + lag)]; e1 += double(dec[size_t(k)]) * dec[size_t(k)]; e2 += double(dec[size_t(k + lag)]) * dec[size_t(k + lag)]; }
+            if (e1 > 0 && e2 > 0) best = std::max(best, float(c / std::sqrt(e1 * e2)));
+        }
+        return best;
+    }
+    void endFrame() {
+        const float eDb = float(10.0 * std::log10(eAll / kFrame + 1e-14));
+        const float hiShare = float(eHi / (eAll + 1e-14));
+        const float r = periodicity();
+        const bool voiced = r > 0.6f && eDb > -70.0f;
+        if (voiced) speechDb = std::max(speechDb, eDb);
+        else speechDb -= 0.1f; // the reference slowly forgets (5 dB per second without speech)
+        const bool breathy = !voiced && r < 0.5f && hiShare < 0.5f && eDb > -75.0f && eDb < speechDb - 10.0f;
+        run = breathy ? run + 1 : 0;
+        target = run >= kRunFrames ? depth : 1.0f;
+        if (voiced) { target = 1.0f; gain = std::max(gain, 0.5f); } // pitched sound returns quickly
+        eAll = eHi = 0;
+    }
+    inline float process(float x) {
+        const float h = hp.process(x);
+        eAll += double(x) * x; eHi += double(h) * h;
+        const float a = aa.process(x);
+        if ((pos & (kDec - 1)) == 0) dec[size_t(decPos++)] = a;
+        if (++pos == kFrame) { pos = 0; decPos = 0; endFrame(); }
+        gain += kGain * (target - gain);
+        return x * gain;
+    }
+};
+
 // Crossfades a stage in and out (10 ms) when it's switched on or off, instead of cutting.
 struct StageFade {
     float mix = 0, stepSize = 1.0f / 480.0f;
@@ -279,6 +442,7 @@ struct GateDetector {
 
 } // namespace mf
 #include "effects.h"
+#include "spectrum.h"
 namespace mf {
 
 // "Closeness" detector: compares bass (100-300 Hz) with treble (1-4 kHz) energy.
@@ -316,14 +480,17 @@ class VoiceChain {
 public:
     explicit VoiceChain(float sampleRate = 48000) : fs(sampleRate), rev(sampleRate) {
         denoise = mf::rnnoise::create(); // nullptr if rnnoise isn't installed: the stage passes audio through
+        vadState = mf::rnnoise::create(); // voice detector for the gate when Noise Removal isn't running
     }
     ~VoiceChain() {
         mf::rnnoise::destroy(denoise);
+        mf::rnnoise::destroy(vadState);
     }
     VoiceChain(const VoiceChain &) = delete;
     VoiceChain &operator=(const VoiceChain &) = delete;
 
     Recorder *recorder = nullptr; // optional tap at the gate input
+    ScopeTap *scope = nullptr;    // optional display tap at the gate input (spectrum view)
     // Optional block-processing hook for third-party plugins (kept as a plain callback so this
     // header stays free of plugin/Qt dependencies).
     void (*blockHook)(void *ctx, float *io, int n) = nullptr;
@@ -360,13 +527,72 @@ private:
         tilt.reset();
         gateIsOpen = false; gateHoldLeft = 0; gateGainDb = 0;
         gDelay.fill(0); gPos = 0;
+        vIn.fill(0); vOut.fill(0); vPos = 0; vadHold = 0;
+        frameMax = 0; frameCount = 0; swSum = swSq = 0; swFrames = 0; swHead = swCount = 0; floorValid = false;
+        applyFloor();
+    }
+
+    // ---- Adaptive noise floor. Every 20 ms the detector's peak level is noted; every 0.5 s the spread of
+    // those peaks is checked. Steady sound (spread < 2.5 dB) may be background: fans, hum, hiss. The floor
+    // is the quietest steady half-second of the last 4 s, and it only RISES when that steadiness is
+    // confirmed: either in at least two separate gaps (background that persists between phrases), or for
+    // 3 s without a break. Speech is never steady; a sustained vowel is one stretch, and in a quiet room the
+    // pauses around it keep the floor low. The floor FALLS at once when a quieter steady half-second appears.
+    // The threshold in use is raised only when that background would otherwise reach the gate's close level.
+    inline void trackFloor(float env) {
+        frameMax = std::max(frameMax, env);
+        if (++frameCount < kFloorFrame) return;
+        const float f = linToDb(frameMax);
+        frameMax = 0; frameCount = 0;
+        swSum += f; swSq += f * f;
+        if (++swFrames < kFloorFrames) return;
+        const float mu = swSum / swFrames, sigma = std::sqrt(std::max(0.0f, swSq / swFrames - mu * mu));
+        swSum = swSq = 0; swFrames = 0;
+
+        const bool steady = sigma < 2.5f && mu > -110.0f;
+        swHist[size_t(swHead)] = steady ? mu + 2.0f * sigma : kNotSteady;
+        swHead = (swHead + 1) % kFloorHistory;
+        if (swCount < kFloorHistory) ++swCount;
+
+        float lowest = kNotSteady;
+        int runs = 0, run = 0, longest = 0;
+        for (int k = 0; k < swCount; ++k) { // oldest to newest
+            const float c = swHist[size_t((swHead - swCount + k + kFloorHistory) % kFloorHistory)];
+            if (c != kNotSteady) {
+                lowest = std::min(lowest, c);
+                if (run++ == 0) ++runs;
+                longest = std::max(longest, run);
+            } else {
+                run = 0;
+            }
+        }
+        if (lowest != kNotSteady) {
+            if (floorValid && lowest < floorDb) floorDb = lowest;                   // quieter: follow at once
+            else if ((runs >= 2 || longest >= kFloorRiseRun) && (!floorValid || lowest > floorDb)) {
+                floorDb = lowest;
+                floorValid = true;
+            }
+        }
+        applyFloor();
+    }
+    void applyFloor() {
+        float closeDb = gateThrDb - gateHystDb, openDb = gateThrDb;
+        // Noise peaks occasionally exceed the measured floor: close 3 dB above it, open 5 dB above it.
+        if (adaptive && floorValid && floorDb + 3.0f > closeDb) {
+            closeDb = floorDb + 3.0f;
+            openDb = std::max(gateThrDb, closeDb + 2.0f);
+        }
+        effOpenLin = dbToLin(openDb);
+        effCloseLin = dbToLin(closeDb);
     }
 
     // A stage that is about to fade in starts from a clean state (no stale filter memory or tails).
     void resetStartingStages() {
-        if (fLowCut.starting()) for (auto &b : lowCut) b.reset();
+        if (fLowCut.starting()) { for (auto &b : lowCut) b.reset(); plosive.reset(); }
+        if (fHum.starting()) hum.reset();
         if (fGate.starting()) resetGate();
         if (fAl.starting()) al.reset();
+        if (fBreath.starting()) breath.reset();
         if (fComp.starting()) compGrDb = 0;
         if (fDeess.starting()) { deHp.reset(); deShelf.reset(); deEnv = deRed = 0; }
         if (fVc.starting()) { vc.reset(); vcLo.reset(); vcHi.reset(); vcBpHp.reset(); vcBpLp.reset(); }
@@ -432,16 +658,21 @@ private:
                 x = fNoise.apply(x, y);
             }
 
-            // 3. Low cut (removes rumble, desk thumps, plosive boom).
+            // 2b. Hum removal (mains hum and its harmonics).
+            if (fHum.running()) x = fHum.apply(x, hum.process(x));
+
+            // 3. Low cut (removes rumble, desk thumps), plus the plosive guard ("p"/"b" pops).
             if (fLowCut.running()) {
                 float y = lowCut[0].process(x);
                 if (lowCutSteep) y = lowCut[1].process(y);
+                if (plosiveOn) y = plosive.process(y);
                 x = fLowCut.apply(x, y);
             }
 
             // 4. Gate / expander. The detector listens to a filtered band; the audio
             //    itself is delayed slightly (look-ahead) so word starts aren't clipped.
             if (recorder) recorder->push(x);
+            if (scope && scope->on.load(std::memory_order_relaxed)) scope->push(x);
             if (fGate.running()) {
                 const float env = det.process(x);
                 gateLvl = std::max(gateLvl, env);
@@ -455,17 +686,38 @@ private:
                 // Opening needs: loud enough AND (if enabled) close enough. Closeness only decides
                 // OPENING: every syllable has a vowel that passes it, and level + hold then carry the
                 // brighter consonants (s, t, k) through, so your words aren't chopped.
+                trackFloor(env);
+                // AI voice detector: use Noise Removal's result if it's running, otherwise run our own.
+                bool voiceOk = true;
+                if (useVad) {
+                    if (!(fNoise.running() && denoise)) {
+                        vIn[vPos] = x * 32768.0f;
+                        if (++vPos == kNoiseFrame) { vPos = 0; lastVad = mf::rnnoise::processFrame(vadState, vOut.data(), vIn.data()); }
+                    }
+                    // Hold a "voice" verdict for 200 ms so the consonants and gaps inside a phrase pass.
+                    if (lastVad >= vadThr) vadHold = vadHoldSamples;
+                    else if (vadHold > 0) --vadHold;
+                    voiceOk = vadHold > 0;
+                }
                 const bool closeOpen = !closeCheck || (tiltBrighter ? tilt.below(tiltOpenPow) : tilt.above(tiltOpenPow));
                 float target;
-                if (env > gateOpenLin && closeOpen) {
+                if (env > effOpenLin && closeOpen && voiceOk) {
                     gateIsOpen = true;
                     gateHoldLeft = gateHoldSamples;
-                } else if (env < gateCloseLin) {
+                } else if (env < effCloseLin) {
                     if (gateHoldLeft > 0) --gateHoldLeft;
                     else gateIsOpen = false;
-                } else if (gateIsOpen) {
+                } else if (gateIsOpen && voiceOk) {
+                    // Above the close level: keep holding. With the voice detector on, only while it still
+                    // hears a voice (its 200 ms memory carries consonants and short gaps).
                     gateHoldLeft = gateHoldSamples;
+                } else if (gateIsOpen) {
+                    if (gateHoldLeft > 0) --gateHoldLeft;
+                    else gateIsOpen = false;
                 }
+                const int reason = gateIsOpen ? 5 : env > effOpenLin && !closeOpen ? 4 : env > effOpenLin && !voiceOk ? 3
+                                 : env > gateOpenLin ? 2 : 1;
+                gateReasonMax = std::max(gateReasonMax, reason);
                 if (gateIsOpen) target = 0.0f;
                 else if (expander) target = std::max(gateRangeDb, (linToDb(env) - gateThrDb) * (gateRatio - 1.0f));
                 else target = gateRangeDb;
@@ -476,6 +728,9 @@ private:
                 gateRed = std::max(gateRed, -gateGainDb);
                 x = fGate.apply(x, delayed * dbToLin(gateGainDb));
             }
+
+            // 4a. Breath reduction (opt-in).
+            if (fBreath.running()) x = fBreath.apply(x, breath.process(x));
 
             // 4b. Auto level: steer your speaking level to a target (frozen in pauses).
             if (fAl.running()) x = fAl.apply(x, al.process(x, fGate.on ? gateIsOpen : true));
@@ -604,6 +859,10 @@ private:
             Meters::bump(m.gateLevel, linToDb(gateLvl));
             Meters::bump(m.gateReduction, gateRed);
             Meters::bump(m.gateOpen, anyOpen ? 1.0f : 0.0f);
+            if (gateReasonMax > m.gateReason.load(std::memory_order_relaxed)) m.gateReason.store(gateReasonMax, std::memory_order_relaxed);
+            gateReasonMax = 0;
+            m.gateFloor.store(floorValid ? floorDb : -120.0f, std::memory_order_relaxed);
+            m.gateOpenAt.store(linToDb(effOpenLin), std::memory_order_relaxed);
         }
         if (fComp.on) {
             Meters::bump(m.compLevel, compLvlDb);
@@ -612,6 +871,7 @@ private:
         if (fDeess.on) Meters::bump(m.deessReduction, deRedMax);
         if (fLim.on) Meters::bump(m.limReduction, limRed);
         m.autoLevelGain.store(fAl.on ? al.gainDb : 0.0f, std::memory_order_relaxed);
+        m.humBase.store(fHum.on ? hum.base : 0.0f, std::memory_order_relaxed);
     }
 
     void update(const Params &p) {
@@ -627,6 +887,10 @@ private:
         fNoise.set(active(NoiseAdded, NoiseOn), jump, fs);
         noiseMixS.configure(fs); noiseMixS.set(p.get(NoiseAmount) / 100.0f, jump);
 
+        fHum.set(active(HumAdded, HumOn), jump, fs);
+        hum.configure(fs, int(p.get(HumFreq) + 0.5f), int(p.get(HumHarmonics) + 0.5f), jump);
+        plosiveOn = p.get(LowCutPlosive) > 0.5f;
+        if (jump) plosive.configure(fs);
         fLowCut.set(active(LowCutAdded, LowCutOn), jump, fs);
         lowCutSteep = p.get(LowCutSteep) > 0.5f;
         if (lowCutSteep) { // 4th-order Butterworth = two stages
@@ -645,11 +909,18 @@ private:
         tiltOpenPow = std::pow(10.0f, p.get(GateTilt) / 10.0f);
         gateThrDb = p.get(GateThreshold);
         gateOpenLin = dbToLin(gateThrDb);
-        gateCloseLin = dbToLin(gateThrDb - p.get(GateHysteresis));
+        gateHystDb = p.get(GateHysteresis);
+        gateCloseLin = dbToLin(gateThrDb - gateHystDb);
+        adaptive = p.get(GateAdaptive) > 0.5f;
+        applyFloor();
         gateRangeDb = p.get(GateRange);
         gateRatio = p.get(GateRatio);
         gateHoldSamples = int(p.get(GateHold) * 0.001f * fs);
-        gLookahead = std::clamp(int(p.get(GateLookahead) * 0.001f * fs), 0, kGateSize - 1);
+        useVad = p.get(GateVad) > 0.5f && vadState;
+        vadThr = p.get(GateVadThreshold) / 100.0f;
+        vadHoldSamples = int(0.2f * fs);
+        // The voice detector needs ~20 ms to decide, so the audio waits that long (word starts aren't clipped).
+        gLookahead = std::clamp(int(std::max(p.get(GateLookahead), useVad ? 20.0f : 0.0f) * 0.001f * fs), 0, kGateSize - 1);
         gAtk = onePole(p.get(GateAttack) / 2.2f, fs);
         gRel = onePole(p.get(GateRelease) / 2.2f, fs);
 
@@ -682,6 +953,8 @@ private:
         fTone.set(active(ToneAdded, ToneOn), jump, fs);
         pluginsOn = active(PluginsAdded, PluginsOn);
 
+        fBreath.set(p.get(BreathOn) > 0.5f, jump, fs);
+        breath.configure(fs, p.get(BreathAmount));
         fAl.set(active(AutoLevelAdded, AutoLevelOn), jump, fs);
         al.configure(fs, p.get(AutoLevelTarget), p.get(AutoLevelMaxGain), int(p.get(AutoLevelSpeed) + 0.5f));
 
@@ -723,7 +996,7 @@ private:
 
     static constexpr int kMaxBlock = 1024;
     std::array<float, kMaxBlock> raw{}; // input after channel + gain (for the bypass crossfade)
-    StageFade fBypass, fNoise, fLowCut, fGate, fAl, fComp, fDeess, fVc, fEq, fTone, fWarm, fEx, fDbl, fEcho, fRev, fLim;
+    StageFade fBypass, fNoise, fHum, fLowCut, fGate, fBreath, fAl, fComp, fDeess, fVc, fEq, fTone, fWarm, fEx, fDbl, fEcho, fRev, fLim;
 
     int channel = 0;
     Smoothed inGainS;
@@ -736,6 +1009,9 @@ private:
     std::array<float, kNoiseFrame> nIn{}, nOut{}, nDry{};
     int nPos = 0;
 
+    HumRemover hum;
+    PlosiveGuard plosive;
+    bool plosiveOn = true;
     bool lowCutSteep = true;
     SmoothBiquad lowCut[2];
 
@@ -748,6 +1024,21 @@ private:
     int gateHoldSamples = 0, gateHoldLeft = 0;
     float gAtk = 0, gRel = 0, gateGainDb = 0;
     bool gateIsOpen = false;
+    int gateReasonMax = 0;
+    // AI voice detector for the gate (optional).
+    DenoiseState *vadState = nullptr;
+    bool useVad = false;
+    float vadThr = 0.5f;
+    int vadHold = 0, vadHoldSamples = 9600, vPos = 0;
+    std::array<float, 480> vIn{}, vOut{};
+    // Adaptive noise floor (see trackFloor).
+    static constexpr int kFloorFrame = 960, kFloorFrames = 25, kFloorRiseRun = 6, kFloorHistory = 8; // 20 ms, 0.5 s, 3 s, 4 s
+    static constexpr float kNotSteady = 1e9f;
+    bool adaptive = true, floorValid = false;
+    float gateHystDb = 4, effOpenLin = 0.1f, effCloseLin = 0.06f;
+    float frameMax = 0, swSum = 0, swSq = 0, floorDb = -120;
+    std::array<float, kFloorHistory> swHist{};
+    int frameCount = 0, swFrames = 0, swHead = 0, swCount = 0;
     static constexpr int kGateSize = 1024, kGateMask = kGateSize - 1;
     std::array<float, kGateSize> gDelay{};
     int gPos = 0, gLookahead = 0;
@@ -768,6 +1059,7 @@ private:
     bool muted = false;
     float muteGain = 1.0f, muteStep = 1.0f / 480.0f;
     AutoLevel al;
+    BreathReducer breath;
     VoiceChanger vc;
     Biquad vcLo, vcHi, vcBpHp, vcBpLp;
     Warmth warm;

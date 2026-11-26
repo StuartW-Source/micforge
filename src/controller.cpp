@@ -44,6 +44,8 @@ const QList<BuiltinPreset> &builtinPresets() {
 
 // Settings that belong to this mic/room, not to a sound style. Built-in presets never touch them,
 // so loading a preset doesn't undo the voice-separation setup or remove added effects.
+std::vector<float> loadSamples(const QString &name, float gain); // Setup recordings (defined below)
+
 QString calibDirPath() { return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/calib"; }
 
 bool isPersonalKey(const QString &k) {
@@ -133,6 +135,8 @@ Controller::Controller(const StartupInfo &startup, QObject *parent)
     m_plugins = new PluginManager(&m_core.rack, AudioCore::kRate, this);
     m_diagnostics = new Diagnostics(this, m_core, *m_backend, m_startup.logPath, this);
     m_micTest = new MicTestSession(m_core, this);
+    m_spectrum = new DetectorSpectrum(m_core, [](const QString &n) { return loadSamples(n, 1.0f); }, this);
+    connect(this, &Controller::recordingsChanged, m_spectrum, &DetectorSpectrum::recordingsChanged);
     m_micTest->onNeedMonitorStream = [this](bool on) { m_testPlayback = on; updateMonitorStream(); };
     m_plugins->setReadOnly(m_startup.safeMode);
     if (!m_startup.safeMode) m_plugins->restore();
@@ -179,6 +183,8 @@ Controller::~Controller() {
     saveNow();
     // Explicit shutdown order: stop the audio thread, then destroy plugins (they live in m_core.rack,
     // which is destroyed before Qt would delete child objects), then everything else.
+    delete m_spectrum;
+    m_spectrum = nullptr;
     delete m_micTest;
     m_micTest = nullptr;
     delete m_diagnostics;
@@ -400,6 +406,16 @@ void Controller::pollMeters() {
     m_compReduction = m.compReduction.exchange(0);
     m_autoLevelGain = m.autoLevelGain.load();
     m_gateTilt = m.gateTilt.exchange(-120);
+    {
+        // Show the most important reason seen recently ("open" or a rejection beats "too quiet") for ~0.3 s.
+        const int code = m.gateReason.exchange(0);
+        if (code >= m_reasonCode || --m_reasonHold <= 0) { m_reasonCode = code; m_reasonHold = 10; }
+        static const char *names[] = {"", "quiet", "noise", "notvoice", "far", "open"};
+        m_gateReason = QString::fromLatin1(names[std::clamp(m_reasonCode, 0, 5)]);
+        m_gateFloor = m.gateFloor.load();
+        m_gateOpenAt = m.gateOpenAt.load();
+        m_humBase = m.humBase.load();
+    }
     m_deessReduction = m.deessReduction.exchange(0);
     m_outPeak = m.outPeak.exchange(-120);
     m_limReduction = m.limReduction.exchange(0);

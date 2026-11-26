@@ -9,6 +9,7 @@
 #include "mictest.h"
 #include "levels.h"
 #include "calibprofiles.h"
+#include "detectorspectrum.h"
 #include "optional/rnnoise_api.h"
 
 #include <QFutureWatcher>
@@ -37,6 +38,7 @@ class Controller : public QObject {
     Q_PROPERTY(PluginManager *plugins READ plugins CONSTANT)
     Q_PROPERTY(Diagnostics *diagnostics READ diagnostics CONSTANT)
     Q_PROPERTY(MicTestSession *micTest READ micTest CONSTANT)
+    Q_PROPERTY(DetectorSpectrum *spectrum READ spectrum CONSTANT)
     // Per-microphone Setup: a message after switching mics, and the microphones that have a saved Setup.
     Q_PROPERTY(QString profileNotice READ profileNotice NOTIFY profileNoticeChanged)
     Q_PROPERTY(QVariantList micProfiles READ micProfiles NOTIFY profileNoticeChanged)
@@ -50,6 +52,11 @@ class Controller : public QObject {
     Q_PROPERTY(qreal gateReduction MEMBER m_gateReduction NOTIFY metersChanged)
     Q_PROPERTY(bool gateOpen MEMBER m_gateOpen NOTIFY metersChanged)
     Q_PROPERTY(qreal gateTilt MEMBER m_gateTilt NOTIFY metersChanged)
+    // Why the gate is open/closed: "" (gate off), "quiet", "noise", "far", "open". Held ~0.3 s so it's readable.
+    Q_PROPERTY(QString gateReason MEMBER m_gateReason NOTIFY metersChanged)
+    Q_PROPERTY(qreal gateFloor MEMBER m_gateFloor NOTIFY metersChanged)     // steady background, dB (-120 = none)
+    Q_PROPERTY(qreal gateOpenAt MEMBER m_gateOpenAt NOTIFY metersChanged)   // threshold in use, dB
+    Q_PROPERTY(qreal humBase MEMBER m_humBase NOTIFY metersChanged)         // 50 / 60 Hz, 0 = not found yet
     Q_PROPERTY(qreal compLevel MEMBER m_compLevel NOTIFY metersChanged)
     Q_PROPERTY(qreal compReduction MEMBER m_compReduction NOTIFY metersChanged)
     Q_PROPERTY(qreal deessReduction MEMBER m_deessReduction NOTIFY metersChanged)
@@ -102,6 +109,7 @@ public:
     PluginManager *plugins() { return m_plugins; }
     Diagnostics *diagnostics() { return m_diagnostics; }
     MicTestSession *micTest() { return m_micTest; }
+    DetectorSpectrum *spectrum() { return m_spectrum; }
     QString profileNotice() const { return m_profileNotice; }
     QVariantList micProfiles() const;
     Q_INVOKABLE void dismissProfileNotice();
@@ -210,6 +218,7 @@ private:
     PluginManager *m_plugins = nullptr;
     Diagnostics *m_diagnostics = nullptr;
     MicTestSession *m_micTest = nullptr;
+    DetectorSpectrum *m_spectrum = nullptr;
     bool m_testPlayback = false;          // mic-test playback needs the monitor output
     void updateMonitorStream();
     QSettings m_settingsStore;
@@ -236,6 +245,9 @@ private:
     qreal m_compReduction = 0, m_deessReduction = 0, m_outPeak = -120, m_limReduction = 0;
     bool m_gateOpen = false;
     qreal m_gateTilt = -120;
+    QString m_gateReason;
+    qreal m_gateFloor = -120, m_gateOpenAt = -120, m_humBase = 0;
+    int m_reasonHold = 0, m_reasonCode = 0;
     qreal m_autoLevelGain = 0;
 
     QString m_calibPhase;

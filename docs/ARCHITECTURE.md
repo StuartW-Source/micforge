@@ -18,8 +18,9 @@ max-since-last-read) and lock-free `Ring` buffers (virtual mic, monitor).
 
 ```
 PipeWire capture (stereo, chosen node) ─► VoiceChain::process
-  channel select → input gain → [noise removal] → low cut → voice gate (detector: band filter + closeness)
-  → [auto level] → compressor → [de-esser] → [voice changer] → [EQ] → tone
+  channel select → input gain → [noise removal] → [hum removal] → low cut (+ plosive guard)
+  → voice gate (detector: band filter + closeness + adaptive floor + optional voice detector)
+  → [breath reduction] → [auto level] → compressor → [de-esser] → [voice changer] → [EQ] → tone
   → (block hook) PluginRack → [warmth] → [exciter] → [doubler] → [echo] → [reverb] → output gain → limiter
 ─► Ring ─► virtual mic stream (Audio/Source "MicForge (processed mic)")
        └► Ring ─► monitor stream (headphones, optional)
@@ -68,6 +69,27 @@ read this one value.
   `profile.ini`. `calib/device` records which mic the active Setup belongs to. On a mic switch the
   outgoing Setup is saved before anything is restored; files are replaced via a temporary file. Profiles
   hold only mic/room parameters (`CalibrationProfiles::profileParams`), never sound-preset ones.
+
+## DSP decisions (Phase 4)
+
+- **Smoothing.** `Smoothed` (one-pole ~10 ms) for gains; `SmoothBiquad` glides frequency/Q/gain and
+  recomputes coefficients every 16 samples; `StageFade` crossfades each stage over 10 ms when switched and
+  clears its state before it fades in; Compare crossfades raw/processed (`kMaxBlock` = 1024 raw samples
+  kept). The first configuration after start applies at once.
+- **True peak.** `TruePeakDetector`: 4× windowed-sinc interpolation (16 taps per phase); its 8-sample lag
+  fits inside the limiter's existing 1.5 ms look-ahead, so latency is unchanged.
+- **Adaptive floor.** 20 ms detector peaks → 0.5 s spread; steady half-seconds are background. Floor =
+  quietest steady half-second of the last 4 s; it rises only with steadiness in two separate gaps or 3 s
+  unbroken, and falls at once. Applied only if it would reach the close level (close = floor + 3, open = +5).
+- **Voice detector.** rnnoise VAD (Noise Removal's, or a second instance). Opening and holding need it;
+  200 ms memory; look-ahead raised to 20 ms while on.
+- **Hum Removal.** Notches 3 Hz wide on f0..10·f0. Auto mode: Goertzel at k·50/k·60 and ±8 Hz neighbours,
+  2 of 3 harmonics 10 dB "peaky", the same verdict in two consecutive seconds.
+- **Plosive guard.** Sub-120 Hz vs 300 Hz–3 kHz envelope ratio > 6 dB (and sub-bass > −35 dB) → 200 Hz low
+  shelf down to −24 dB, 2 ms / 80 ms.
+- **Breath reduction.** 20 ms frames: autocorrelation periodicity on a 12 kHz copy, share above 4.5 kHz,
+  level vs recent voiced level; 8 breathy frames in a row → turn down.
+- **Spectrum view.** `ScopeTap` (atomic ring written only while the view is open) → FFT on the UI thread.
 
 ## UI structure (Phase 2)
 

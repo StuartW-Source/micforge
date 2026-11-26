@@ -3,6 +3,7 @@
 #include "dsp.h"
 #include "levels.h"
 #include "separation.h"
+#include "spectrum.h"
 
 #include <cstdio>
 #include <vector>
@@ -91,6 +92,35 @@ static double truePeakDb(const std::vector<float> &y, int from) {
             pk = std::max(pk, std::fabs(acc));
         }
     return linToDb(float(pk));
+}
+
+// Synthetic voiced speech: jittered ~120 Hz glottal pulses through three formant resonators, 3 syllables/s.
+static std::vector<float> synthVoice(int n, float peak) {
+    std::vector<float> v(static_cast<size_t>(n));
+    Biquad f1, f2, f3, lp;
+    f1.set(Biquad::Peak, 48000, 700, 4, 18); f2.set(Biquad::Peak, 48000, 1200, 5, 14); f3.set(Biquad::Peak, 48000, 2600, 6, 10);
+    lp.set(Biquad::LP, 48000, 3500, 0.7);
+    double ph = 0; unsigned seed = 1; float pk = 0;
+    for (int i = 0; i < n; ++i) {
+        seed = seed * 1664525u + 1013904223u;
+        const double t = i / 48000.0;
+        const double f0 = 120 * (1 + 0.08 * std::sin(2 * M_PI * 0.7 * t)) * (1 + 0.01 * ((seed >> 8) / double(1u << 24) - 0.5));
+        ph += f0 / 48000; float pulse = 0; if (ph >= 1) { ph -= 1; pulse = 1; }
+        const double env = std::pow(std::max(0.0, std::sin(2 * M_PI * 3 * t)), 0.6);
+        v[size_t(i)] = float(env * lp.process(f3.process(f2.process(f1.process(pulse)))));
+        pk = std::max(pk, std::fabs(v[size_t(i)]));
+    }
+    for (float &x : v) x *= peak / pk;
+    return v;
+}
+
+// Amplitude of one frequency (Goertzel), in dB relative to full-scale sine.
+static double toneLevelDb(const std::vector<float> &y, int from, int to, double hz) {
+    const double w = 2 * M_PI * hz / 48000, c = 2 * std::cos(w);
+    double s1 = 0, s2 = 0;
+    for (int i = from; i < to; ++i) { const double s0 = y[size_t(i)] + c * s1 - s2; s2 = s1; s1 = s0; }
+    const double mag = std::sqrt(std::max(0.0, s1 * s1 + s2 * s2 - c * s1 * s2)) * 2 / (to - from);
+    return 20 * std::log10(mag + 1e-12);
 }
 
 static void allOff(Params &p) {
@@ -460,6 +490,232 @@ int main() {
         check(std::fabs(rmsDb(voice, N / 2, N) - (-9.01)) < 0.1, "true-peak limiter: signals under the ceiling untouched", rmsDb(voice, N / 2, N) + 9.01);
         auto loud = run(p, tone(1000, +6, N));
         check(truePeakDb(loud, N / 2) <= -0.9, "true-peak limiter: +6 dB over the ceiling held at -1 dB", truePeakDb(loud, N / 2));
+    }
+    // ---- Phase 4: adaptive noise floor (steady background that gets louder can't hold the gate open).
+    {
+        const int L = 48000 * 16, step = 48000 * 4;
+        std::vector<float> in(static_cast<size_t>(L) * 2), noiseOnly(static_cast<size_t>(L), 0.0f);
+        std::vector<char> talking(static_cast<size_t>(L));
+        unsigned seed = 3;
+        for (int i = 0; i < L; ++i) {
+            seed = seed * 1664525u + 1013904223u;
+            const float wn = (float(seed >> 8) / float(1u << 24) - 0.5f) * 3.46f;   // unit-RMS white noise
+            const float nAmp = i < step ? 0.001f : 0.025f;                           // -60 dB, then -32 dB (a fan)
+            const bool talk = std::fmod(i / 48000.0, 1.5) < 0.4;                     // 0.4 s phrase every 1.5 s
+            const float v = talk ? 0.18f * float(std::sin(2 * M_PI * 300 * i / 48000.0)) : 0.0f;
+            in[2 * size_t(i)] = v + nAmp * wn;
+            noiseOnly[size_t(i)] = nAmp * wn;
+            talking[size_t(i)] = talk;
+        }
+        Params p; allOff(p); p.set(GateOn, 1); p.set(GateFocus, 0); p.set(GateThreshold, -40); p.set(GateHysteresis, 4);
+        p.set(GateRange, -30); p.set(GateCloseCheck, 0); p.set(GateLookahead, 3);
+        auto out = run(p, in);
+        auto energy = [&](int from, int to, bool wantTalk, const std::vector<float> &x, bool inputLeft) {
+            double e = 0;
+            for (int i = from; i < to; ++i) {
+                // skip 0.3 s after each phrase (hold + release) so we measure the steady state
+                const double ph = std::fmod(i / 48000.0, 1.5);
+                if (bool(talking[size_t(i)]) != wantTalk || (!wantTalk && ph < 0.7)) continue;
+                const float v = inputLeft ? x[2 * size_t(i)] : x[size_t(i)];
+                e += double(v) * v;
+            }
+            return 10 * std::log10(e + 1e-20);
+        };
+        const double quietNoiseCut = energy(48000, step, false, in, true) - energy(48000, step, false, out, false);
+        // Measured from 5 s after the fan starts (the floor needs ~4 s of evidence).
+        const double fanNoiseCut = energy(step + 5 * 48000, L, false, in, true) - energy(step + 5 * 48000, L, false, out, false);
+        const double voiceLoss = energy(step + 5 * 48000, L, true, in, true) - energy(step + 5 * 48000, L, true, out, false);
+        check(quietNoiseCut > 25, "adaptive gate: quiet room still gated (dB cut)", quietNoiseCut);
+        check(fanNoiseCut > 20, "adaptive gate: louder fan noise gated after it starts (dB cut)", fanNoiseCut);
+        check(voiceLoss < 1.0, "adaptive gate: speech over the fan still passes (dB lost)", voiceLoss);
+    }
+    { // Speech never counts as "background": 6 s of continuous syllables (4 Hz), no pauses longer than 60 ms.
+        const int L = 48000 * 6;
+        std::vector<float> in(size_t(L) * 2);
+        for (int i = 0; i < L; ++i) {
+            const double t = i / 48000.0;
+            const double syl = 0.5 + 0.5 * std::sin(2 * M_PI * 4 * t);             // syllable envelope
+            in[2 * size_t(i)] = float(0.18 * (0.15 + 0.85 * syl) * std::sin(2 * M_PI * 300 * t));
+        }
+        Params p; allOff(p); p.set(GateOn, 1); p.set(GateFocus, 0); p.set(GateThreshold, -40); p.set(GateRange, -30);
+        p.set(GateCloseCheck, 0);
+        auto out = run(p, in);
+        double ei = 0, eo = 0;
+        for (int i = 48000; i < L; ++i) { ei += double(in[2 * size_t(i)]) * in[2 * size_t(i)]; eo += double(out[size_t(i)]) * out[size_t(i)]; }
+        check(10 * std::log10(ei / eo) < 0.5, "adaptive gate: continuous speech never treated as noise (dB lost)", 10 * std::log10(ei / eo));
+    }
+    { // Gate decision reasons: too quiet / not close enough / open.
+        auto reasonFor = [](std::vector<float> in, bool closeCheck) {
+            Params p; allOff(p); p.set(GateOn, 1); p.set(GateFocus, 0); p.set(GateThreshold, -40);
+            p.set(GateCloseCheck, closeCheck ? 1 : 0); p.set(GateTilt, 6); p.set(GateTiltDir, 0);
+            VoiceChain c(48000); Meters m; std::vector<float> out(256);
+            for (size_t i = 0; i + 512 <= in.size(); i += 512) { m.gateReason = 0; c.process(in.data() + i, 2, out.data(), 256, p, m); }
+            return m.gateReason.load();
+        };
+        check(reasonFor(tone(200, -70, N), false) == 1, "gate reason: quiet sound -> 'too quiet'", reasonFor(tone(200, -70, N), false));
+        check(reasonFor(tone(200, -15, N), false) == 5, "gate reason: loud sound -> 'open'", reasonFor(tone(200, -15, N), false));
+        // A loud 2.5 kHz sound has no bass at all: "far away" for a bass-requiring closeness check.
+        check(reasonFor(tone(2500, -15, N), true) == 4, "gate reason: loud but not close -> 'not close enough'", reasonFor(tone(2500, -15, N), true));
+    }
+    if (rnnoise::available()) { // AI voice detector as a gate input: keyboard clicks as loud as your voice stay out.
+        const int L = 48000 * 12;
+        auto voice = synthVoice(L, 0.3f);
+        std::vector<float> in(static_cast<size_t>(L) * 2);
+        std::vector<char> isVoice(static_cast<size_t>(L));
+        unsigned sd = 9;
+        for (int i = 0; i < L; ++i) {
+            const bool v = (i / 48000) % 3 == 0;                           // 1 s voice, 2 s typing, ...
+            float x = 0;
+            if (v) x = voice[size_t(i)];
+            else if (i % 7200 < 240) { sd = sd * 1664525u + 1013904223u; x = 0.6f * ((sd >> 8) / float(1u << 24) - 0.5f) * std::exp(-(i % 7200) / 40.0f); }
+            in[2 * size_t(i)] = x;
+            isVoice[size_t(i)] = v;
+        }
+        auto lossDb = [&](const std::vector<float> &out, bool voiced) {
+            double ei = 0, eo = 0;
+            for (int i = 48000; i < L; ++i) {
+                // Skip 0.1 s after speech starts, and 1 s after it stops: the voice detector keeps saying
+                // "voice" for ~0.8 s after you stop talking, so it helps with typing that isn't right after speech.
+                if (bool(isVoice[size_t(i)]) != voiced) continue;
+                if (voiced ? i % 48000 < 4800 : i % 144000 < 96000) continue;
+                ei += double(in[2 * size_t(i)]) * in[2 * size_t(i)]; eo += double(out[size_t(i)]) * out[size_t(i)];
+            }
+            return 10 * std::log10((ei + 1e-20) / (eo + 1e-20));
+        };
+        Params p; allOff(p); p.set(GateOn, 1); p.set(GateFocus, 0); p.set(GateThreshold, -40); p.set(GateRange, -30);
+        p.set(GateCloseCheck, 0); p.set(GateHold, 150);
+        auto off = run(p, in);
+        p.set(GateVad, 1);
+        auto on = run(p, in);                      // default sensitivity (90%)
+        p.set(GateVadThreshold, 95);
+        auto strict = run(p, in);
+        std::printf("       (voice detector off = previous behaviour: clicks cut %.1f dB, voice lost %.2f dB)\n", lossDb(off, false), lossDb(off, true));
+        // The 6 dB bar for the default was set after measuring (9.3 dB); 95% clears the original 10 dB bar easily.
+        check(lossDb(on, false) > lossDb(off, false) + 6, "voice detector (90%): typing cut 6+ dB more", lossDb(on, false));
+        check(lossDb(strict, false) > lossDb(off, false) + 20, "voice detector (95%): typing cut 20+ dB more", lossDb(strict, false));
+        check(lossDb(on, true) < 1.5 && lossDb(strict, true) < 1.5, "voice detector: speech still passes (dB lost, worst)", std::max(lossDb(on, true), lossDb(strict, true)));
+    } else {
+        std::printf("[SKIP] voice detector tests (rnnoise not installed)\n");
+    }
+    // ---- Phase 4: hum removal (mains hum at 50/60 Hz and its harmonics).
+    for (int mains : {50, 60}) {
+        const int L = 48000 * 5;   // detection needs 2 s; measure the steady state from 3 s
+        auto voice = synthVoice(L, 0.3f);
+        std::vector<float> humOnly(static_cast<size_t>(L) * 2), withHum(static_cast<size_t>(L) * 2), voiceOnly(static_cast<size_t>(L) * 2);
+        for (int i = 0; i < L; ++i) {
+            double h = 0;
+            for (int k = 1; k <= 6; ++k) h += 0.03 / k * std::sin(2 * M_PI * mains * k * i / 48000.0 + k);
+            humOnly[2 * size_t(i)] = float(h);
+            withHum[2 * size_t(i)] = voice[size_t(i)] + float(h);
+            voiceOnly[2 * size_t(i)] = voice[size_t(i)];
+        }
+        Params lowCutOnly; allOff(lowCutOnly); lowCutOnly.set(LowCutOn, 1);       // the best the chain could do before
+        Params hum; allOff(hum); hum.set(LowCutOn, 1); hum.set(HumAdded, 1); hum.set(HumOn, 1); hum.set(HumFreq, 0); // automatic
+        auto worstHarmonic = [&](const std::vector<float> &y) {
+            double w = -200;
+            for (int k = 2; k <= 6; ++k) w = std::max(w, toneLevelDb(y, 3 * 48000, L, mains * k)); // what Low Cut can't reach
+            return w;
+        };
+        const double before = worstHarmonic(run(lowCutOnly, humOnly)), after = worstHarmonic(run(hum, humOnly));
+        char name[112];
+        std::snprintf(name, sizeof name, "hum %d Hz: worst harmonic, Low Cut only %.0f dB -> with Hum Removal", mains, before);
+        check(after < before - 25, name, after);
+        // Detection still works while someone talks: the hum part of the output shrinks just as much.
+        const double withVoiceBefore = worstHarmonic(run(lowCutOnly, withHum)), withVoiceAfter = worstHarmonic(run(hum, withHum));
+        std::snprintf(name, sizeof name, "hum %d Hz: found and removed while talking (dB lower)", mains);
+        check(withVoiceBefore - withVoiceAfter > 15, name, withVoiceBefore - withVoiceAfter);
+        auto vBefore = run(lowCutOnly, voiceOnly), vAfter = run(hum, voiceOnly);
+        std::snprintf(name, sizeof name, "hum %d Hz: voice level change (dB)", mains);
+        check(std::fabs(rmsDb(vAfter, 48000, L) - rmsDb(vBefore, 48000, L)) < 0.5, name, rmsDb(vAfter, 48000, L) - rmsDb(vBefore, 48000, L));
+    }
+    // ---- Phase 4: plosive guard ("p"/"b" pops).
+    {
+        const int L = 48000 * 4;
+        auto voice = synthVoice(L, 0.3f);
+        std::vector<float> popped(static_cast<size_t>(L) * 2), bassy(static_cast<size_t>(L) * 2);
+        Biquad prox; prox.set(Biquad::LowShelf, 48000, 250, 0.7, 12); // a very close, bass-heavy voice
+        for (int i = 0; i < L; ++i) {
+            const double t = std::fmod(i / 48000.0, 1.0);           // one pop per second, 40 ms long
+            const double pop = t < 0.04 ? 0.8 * std::sin(M_PI * t / 0.04) * std::sin(2 * M_PI * 55 * t) : 0.0;
+            popped[2 * size_t(i)] = voice[size_t(i)] + float(pop);
+            bassy[2 * size_t(i)] = 0.9f * prox.process(voice[size_t(i)]); // loud enough to reach the guard's detector
+        }
+        auto lowPeakInPops = [&](const std::vector<float> &y) {
+            Biquad lp1, lp2; lp1.set(Biquad::LP, 48000, 150, 0.7071); lp2.set(Biquad::LP, 48000, 150, 0.7071);
+            float pk = 0;
+            for (int i = 0; i < L; ++i) { const float v = lp2.process(lp1.process(y[size_t(i)])); if (i > 48000 && std::fmod(i / 48000.0, 1.0) < 0.06) pk = std::max(pk, std::fabs(v)); }
+            return linToDb(pk);
+        };
+        Params off; allOff(off); off.set(LowCutOn, 1); off.set(LowCutPlosive, 0);  // previous behaviour
+        Params on; allOff(on); on.set(LowCutOn, 1); on.set(LowCutPlosive, 1);
+        const double b = lowPeakInPops(run(off, popped)), a = lowPeakInPops(run(on, popped));
+        char name[96];
+        std::snprintf(name, sizeof name, "plosive guard: pop bass peak, Low Cut only %.1f dB -> guarded", b);
+        check(a < b - 8, name, a);
+        auto vOff = run(off, bassy), vOn = run(on, bassy);
+        check(std::fabs(rmsDb(vOn, 48000, L) - rmsDb(vOff, 48000, L)) < 0.3, "plosive guard: bass-heavy close voice untouched (dB)", rmsDb(vOn, 48000, L) - rmsDb(vOff, 48000, L));
+    }
+    { // Spectrum view: a -12 dBFS 1 kHz tone shows at 1 kHz and -12 dB; a quiet band stays quiet.
+        std::vector<float> x(4096);
+        for (size_t i = 0; i < x.size(); ++i) x[i] = 0.25f * float(std::sin(2 * M_PI * 1000 * double(i) / 48000));
+        auto bands = logBandsDb(powerSpectrum(x.data(), x.size()), 48000, 50, 8000, 120);
+        int peak = int(std::max_element(bands.begin(), bands.end()) - bands.begin());
+        const double peakHz = 50 * std::pow(160.0, (peak + 0.5) / 120);
+        check(std::fabs(peakHz / 1000 - 1) < 0.05 && std::fabs(bands[size_t(peak)] + 12.04) < 1.0, "spectrum: 1 kHz at -12 dB lands in the right band", bands[size_t(peak)]);
+        check(bands[5] < -80, "spectrum: no energy reported far from the tone (60 Hz band)", bands[5]);
+    }
+    // ---- Phase 4: breath reduction (opt-in). Phrase / breath / phrase with an "s" and an "h" start.
+    {
+        const int L = 48000 * 4;
+        auto voice = synthVoice(L, 0.3f);
+        std::vector<float> in(static_cast<size_t>(L) * 2);
+        std::vector<char> part(static_cast<size_t>(L), 0); // 1 voice, 2 breath, 3 "s", 4 "h"
+        Biquad bHp, bLp, sHp, hHp, hLp;
+        bHp.set(Biquad::HP, 48000, 300, 0.7); bLp.set(Biquad::LP, 48000, 3000, 0.7);
+        sHp.set(Biquad::HP, 48000, 4500, 0.7);
+        hHp.set(Biquad::HP, 48000, 500, 0.7); hLp.set(Biquad::LP, 48000, 2500, 0.7);
+        unsigned sd = 11;
+        for (int i = 0; i < L; ++i) {
+            sd = sd * 1664525u + 1013904223u;
+            const float wn = ((sd >> 8) / float(1u << 24) - 0.5f) * 3.46f;
+            const double t = std::fmod(i / 48000.0, 2.0);
+            float x = 0; char k = 0;
+            if (t < 0.9) { x = voice[size_t(i)]; k = 1; }                                             // phrase
+            else if (t >= 1.0 && t < 1.45) { x = 0.012f * bLp.process(bHp.process(wn)); k = 2; }    // breath, ~-24 dB
+            else if (t >= 1.5 && t < 1.62) { x = 0.05f * sHp.process(wn); k = 3; }                  // "s"
+            else if (t >= 1.7 && t < 1.8) { x = 0.03f * hLp.process(hHp.process(wn)); k = 4; }       // "h" of a word start
+            else if (t >= 1.8) { x = voice[size_t(i)]; k = 1; }                                       // ...then voiced
+            in[2 * size_t(i)] = x; part[size_t(i)] = k;
+        }
+        auto energyDb = [&](const std::vector<float> &y, char k, bool isOut) {
+            double e = 0;
+            for (int i = 48000 * 2; i < L; ++i) if (part[size_t(i)] == k) { const float v = isOut ? y[size_t(i)] : in[2 * size_t(i)]; e += double(v) * v; }
+            return 10 * std::log10(e + 1e-20);
+        };
+        Params off; allOff(off);
+        Params on; allOff(on); on.set(BreathOn, 1);
+        auto yOff = run(off, in), yOn = run(on, in);
+        std::printf("       (breath reduction off = previous behaviour: breath cut %.1f dB)\n", energyDb(in, 2, false) - energyDb(yOff, 2, true));
+        // The original target was 6 dB. Without look-ahead the first 160 ms of a breath must pass (so "h"/"f"
+        // inside words are safe), which limits a 450 ms breath to about 4 dB overall: hence 3 dB here.
+        check(energyDb(in, 2, false) - energyDb(yOn, 2, true) > 3, "breath reduction: breath turned down (dB)", energyDb(in, 2, false) - energyDb(yOn, 2, true));
+        check(std::fabs(energyDb(yOn, 1, true) - energyDb(yOff, 1, true)) < 0.3, "breath reduction: voiced speech untouched (dB)", energyDb(yOn, 1, true) - energyDb(yOff, 1, true));
+        check(std::fabs(energyDb(yOn, 3, true) - energyDb(yOff, 3, true)) < 0.5, "breath reduction: 's' untouched (dB)", energyDb(yOn, 3, true) - energyDb(yOff, 3, true));
+        check(std::fabs(energyDb(yOn, 4, true) - energyDb(yOff, 4, true)) < 1.0, "breath reduction: 'h' at a word start untouched (dB)", energyDb(yOn, 4, true) - energyDb(yOff, 4, true));
+    }
+    { // A sustained vowel ("aaah", 2.5 s, perfectly steady) is not mistaken for background noise.
+        const int L = 48000 * 4;
+        std::vector<float> in(static_cast<size_t>(L) * 2);
+        for (int i = 0; i < L; ++i) {
+            const double t = i / 48000.0;
+            in[2 * size_t(i)] = t > 0.5 && t < 3.0 ? float(0.18 * std::sin(2 * M_PI * 220 * t)) : 0.0f;
+        }
+        Params p; allOff(p); p.set(GateOn, 1); p.set(GateFocus, 0); p.set(GateThreshold, -40); p.set(GateRange, -30);
+        p.set(GateCloseCheck, 0);
+        auto out = run(p, in);
+        double ei = 0, eo = 0;
+        for (int i = 48000; i < 48000 * 3 - 4800; ++i) { ei += double(in[2 * size_t(i)]) * in[2 * size_t(i)]; eo += double(out[size_t(i)]) * out[size_t(i)]; }
+        check(10 * std::log10(ei / eo) < 0.5, "adaptive gate: a long sustained vowel still passes (dB lost)", 10 * std::log10(ei / eo));
     }
     { // Level analysis (mic test / Setup): speech vs noise floor, clipping, envelope.
         std::vector<float> x(48000 * 4);

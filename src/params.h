@@ -123,6 +123,16 @@ enum ParamId {
     OutputGain,     // dB
     Bypass,         // 1 = only channel select + input gain
     Mute,           // 1 = send silence (fades out/in without clicks); never saved
+    GateAdaptive,   // 1 = raise the gate threshold above steady background noise that gets louder
+    GateVad,        // 1 = the gate also needs the AI voice detector (rnnoise) to hear a voice before opening
+    GateVadThreshold, // % voice probability needed to open
+    HumAdded,       // Hum Removal is in the chain
+    HumOn,
+    HumFreq,        // 0 = detect automatically, 1 = 50 Hz, 2 = 60 Hz
+    HumHarmonics,   // how many harmonics to remove (1 = only the fundamental)
+    LowCutPlosive,  // 1 = Low Cut also tames "p"/"b" pops (dynamic bass cut on sudden low-frequency bursts)
+    BreathOn,       // 1 = turn down breaths between phrases (opt-in)
+    BreathAmount,   // dB of reduction for breaths
     PARAM_COUNT
 };
 
@@ -250,6 +260,16 @@ inline constexpr ParamDef kParams[PARAM_COUNT] = {
     {"outputGain",     0,    -24,   24},
     {"bypass",         0,     0,    1},
     {"mute",           0,     0,    1},
+    {"gateAdaptive",   1,     0,    1},
+    {"gateVad",        0,     0,    1},
+    {"gateVadThreshold", 90,  10,   99},
+    {"humAdded",       0,     0,    1},
+    {"humOn",          1,     0,    1},
+    {"humFreq",        0,     0,    2},
+    {"humHarmonics",   6,     1,   10},
+    {"lowCutPlosive",  1,     0,    1},
+    {"breathOn",       0,     0,    1},
+    {"breathAmount",  12,     3,   30},
 };
 
 } // namespace mf
@@ -264,6 +284,6 @@ constexpr bool keyIs(int id, const char *k) {
 static_assert(keyIs(InputGain, "inputGain") && keyIs(GateAdded, "gateAdded") && keyIs(GateTiltDir, "gateTiltDir") &&
               keyIs(AutoLevelSpeed, "autoLevelSpeed") && keyIs(CompMakeup, "compMakeup") && keyIs(VcMix, "vcMix") &&
               keyIs(Eq5Q, "eq5Q") && keyIs(ToneAir, "toneAir") && keyIs(PluginsOn, "pluginsOn") && keyIs(ReverbMix, "reverbMix") &&
-              keyIs(Bypass, "bypass") && keyIs(Mute, "mute"),
+              keyIs(Bypass, "bypass") && keyIs(Mute, "mute") && keyIs(GateAdaptive, "gateAdaptive") && keyIs(GateVadThreshold, "gateVadThreshold") && keyIs(LowCutPlosive, "lowCutPlosive") && keyIs(BreathAmount, "breathAmount"),
               "kParams rows are out of step with the ParamId enum");
 } // namespace mf

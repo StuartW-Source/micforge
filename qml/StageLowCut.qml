@@ -24,6 +24,13 @@ StagePanel {
         format: (v) => Theme.fmtHz(v)
         help: "80 Hz is a safe start for speech. 100–120 Hz for a noisy room or if you're very close to the mic."
     }
+    RowLayout {
+        Layout.fillWidth: true
+        spacing: 10
+        ToggleSwitch { paramKey: "lowCutPlosive"; accent: Theme.lowcut; label: "Tame pops" }
+        Text { text: "Tame “p” and “b” pops"; color: Theme.text; font.pixelSize: Theme.fsBody }
+        HelpButton { text: "When a “p” or “b” hits the mic with a burst of deep bass, the bass is turned down for a moment (a few hundredths of a second). Your normal voice, even a deep one close to the mic, isn't affected. A pop filter or foam windscreen on the mic still helps most." }
+    }
     ColumnLayout {
         Layout.fillWidth: true
         spacing: 6

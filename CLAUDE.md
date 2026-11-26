@@ -52,6 +52,7 @@ Plugin-host tests and the recordings analyser are described in `docs/TESTING.md`
 | `src/diagnostics.*`, `src/privacy.h` | Diagnostics page data and the privacy-scrubbed report |
 | `src/mictest.*`, `src/levels.h` | Mic test session; level analysis (shared with Setup) |
 | `src/calibprofiles.*` | Per-microphone Setup profiles |
+| `src/spectrum.h`, `src/detectorspectrum.*` | FFT/log bands; the gate's spectrum view |
 | `src/startup.*` | Logging, single instance, crash-loop guard / safe mode, settings backups, signals |
 | `src/optional/` | Run-time loading of optional libraries (rnnoise, lilv) via `src/platform/dynlib.h` |
 | `src/plugins/`, `src/pluginmanager.*` | VST3 + LV2 hosting, plugin chain management |
