@@ -259,6 +259,56 @@ QString PluginManager::text(int slot, int index, double v) const {
     return e && e->inst && index >= 0 && index < e->inst->paramCount() ? e->inst->valueText(index, float(v)) : QString();
 }
 
+// ---------------------------------------------------------------- presets
+
+QVariantList PluginManager::exportChain() const {
+    QVariantList out;
+    for (const auto &e : m_entries) {
+        QVariantMap vals = e.saved;
+        if (e.inst)
+            for (int i = 0; i < e.inst->paramCount(); ++i) vals[e.inst->param(i).id] = e.inst->value(i);
+        out << QVariantMap{{"format", e.info.format}, {"id", e.info.id}, {"name", e.info.name},
+                           {"bypass", e.bypass}, {"params", vals}};
+    }
+    return out;
+}
+
+QStringList PluginManager::importChain(const QVariantList &chain) {
+    if (m_readOnly) return {};
+    // Resolve every plugin first (scan results, then the current chain; LV2 needs only its URI).
+    std::vector<Entry> fresh;
+    QStringList missing;
+    for (const QVariant &v : chain) {
+        if (int(fresh.size()) >= PluginRack::kSlots) break;
+        const QVariantMap m = v.toMap();
+        const QString format = m.value("format").toString(), id = m.value("id").toString();
+        PluginInfo info;
+        bool found = false;
+        for (const auto &i : m_found) if (i.format == format && i.id == id) { info = i; found = true; break; }
+        for (const auto &e : m_entries) if (!found && e.info.format == format && e.info.id == id) { info = e.info; found = true; }
+        if (!found && format == "LV2") { info.format = format; info.id = id; info.name = m.value("name").toString(); found = true; }
+        if (!found) { missing << (m.value("name").toString().isEmpty() ? id : m.value("name").toString()); continue; }
+        Entry e;
+        e.info = info;
+        e.bypass = m.value("bypass").toBool();
+        e.saved = m.value("params").toMap();
+        fresh.push_back(std::move(e));
+    }
+    // Take the old chain away from the audio thread, wait for any block in flight, then replace it.
+    std::vector<Entry> old;
+    old.swap(m_entries);
+    publish();
+    m_rack->waitIdle();
+    old.clear();
+    for (auto &e : fresh) {
+        if (!instantiate(e) && e.error.isEmpty()) e.error = tr("This plugin couldn't be loaded.");
+        m_entries.push_back(std::move(e));
+    }
+    publish();
+    save();
+    return missing;
+}
+
 // ---------------------------------------------------------------- persistence
 
 void PluginManager::save() const {

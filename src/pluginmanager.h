@@ -43,6 +43,11 @@ public:
     Q_INVOKABLE void resetValue(int slot, int index);
     Q_INVOKABLE QString text(int slot, int index, double v) const;
 
+    // For sound presets: the chain without file paths, and replacing the chain from such a list.
+    // importChain returns the names of plugins that aren't installed here (they're skipped).
+    QVariantList exportChain() const;
+    QStringList importChain(const QVariantList &chain);
+
     void restore();  // load the saved chain (call once at startup)
     void setReadOnly(bool ro) { m_readOnly = ro; } // safe mode: never overwrite the saved chain
     void save() const;

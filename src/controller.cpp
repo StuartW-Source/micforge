@@ -1,4 +1,5 @@
 #include "controller.h"
+#include "presetfile.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -444,43 +445,66 @@ bool Controller::isBuiltinPreset(const QString &name) const {
 }
 
 void Controller::loadPreset(const QString &name) {
-    QVariantMap values;
-    bool found = false;
+    m_presetNotice.clear();
     for (const auto &p : builtinPresets()) {
-        if (name == p.name) {
-            for (int i = 0; i < PARAM_COUNT; ++i)
-                if (!isPersonalKey(kParams[i].key)) values[kParams[i].key] = kParams[i].def;
-            for (auto it = p.values.begin(); it != p.values.end(); ++it) values[it.key()] = it.value();
-            found = true;
+        if (name != p.name) continue;
+        // Built-in presets reset every sound setting, but never touch Setup values, added effects or plugins.
+        QVariantMap values;
+        for (int i = 0; i < PARAM_COUNT; ++i)
+            if (!isPersonalKey(kParams[i].key)) values[kParams[i].key] = kParams[i].def;
+        for (auto it = p.values.begin(); it != p.values.end(); ++it) values[it.key()] = it.value();
+        for (auto it = values.begin(); it != values.end(); ++it) {
+            const int id = idForKey(it.key());
+            if (id < 0) continue;
+            m_params.insert(it.key(), it.value().toDouble());
+            applyToEngine(id, it.value().toDouble());
         }
+        m_currentPreset = name;
+        emit presetsChanged();
+        return;
     }
-    if (!found) {
-        QFile f(presetDir() + "/" + name + ".json");
-        if (!f.open(QIODevice::ReadOnly)) return;
-        values = QJsonDocument::fromJson(f.readAll()).object().toVariantMap();
-        values.remove("bypass");
-        values.remove("mute");
+    applyPresetFile(presetDir() + "/" + name + ".json", name);
+}
+
+// Loads a user preset file: its sound settings (never Setup values) and, if it has them, its plugins.
+bool Controller::applyPresetFile(const QString &path, const QString &name) {
+    QFile f(path);
+    PresetFile pf;
+    QString err;
+    if (!f.open(QIODevice::ReadOnly) || !PresetFile::fromJson(f.readAll(), pf, &err)) {
+        m_presetNotice = tr("Couldn't load “%1”: %2").arg(name, err.isEmpty() ? tr("the file can't be read") : err);
+        emit presetsChanged();
+        return false;
     }
-    for (auto it = values.begin(); it != values.end(); ++it) {
+    for (auto it = pf.params.begin(); it != pf.params.end(); ++it) {
         const int id = idForKey(it.key());
         if (id < 0) continue;
         m_params.insert(it.key(), it.value().toDouble());
         applyToEngine(id, it.value().toDouble());
     }
+    if (pf.hasPlugins && m_plugins) {
+        const QStringList missing = m_plugins->importChain(pf.plugins);
+        if (!missing.isEmpty())
+            m_presetNotice = tr("“%1” uses plugins that aren't installed here, so they were left out: %2.").arg(name, missing.join(", "));
+    }
     m_currentPreset = name;
     emit presetsChanged();
+    return true;
 }
 
 void Controller::savePreset(const QString &rawName) {
     const QString name = rawName.trimmed().replace('/', '-');
-    if (name.isEmpty() || isBuiltinPreset(name)) return;
+    if (name.isEmpty() || isBuiltinPreset(name) || m_startup.safeMode) return;
     QDir().mkpath(presetDir());
-    QJsonObject o;
+    PresetFile pf;
+    pf.name = name;
     for (int i = 0; i < PARAM_COUNT; ++i)
-        if (i != Bypass && i != Mute) o[kParams[i].key] = m_params.value(kParams[i].key).toDouble();
+        if (!isSetupKey(kParams[i].key)) pf.params[kParams[i].key] = m_params.value(kParams[i].key).toDouble();
+    if (m_plugins) pf.plugins = m_plugins->exportChain();
+    pf.hasPlugins = true;
     QFile f(presetDir() + "/" + name + ".json");
     if (!f.open(QIODevice::WriteOnly)) return;
-    f.write(QJsonDocument(o).toJson());
+    f.write(pf.toJson(version()));
     m_currentPreset = name;
     m_saveTimer.start();
     emit presetsChanged();
@@ -491,6 +515,48 @@ void Controller::deletePreset(const QString &name) {
     QFile::remove(presetDir() + "/" + name + ".json");
     if (m_currentPreset == name) m_currentPreset.clear();
     emit presetsChanged();
+}
+
+QString Controller::exportPreset(const QString &name, const QUrl &file) {
+    const QString to = file.isLocalFile() ? file.toLocalFile() : file.toString();
+    PresetFile pf;
+    pf.name = name;
+    if (isBuiltinPreset(name)) {
+        for (const auto &p : builtinPresets())
+            if (p.name == name) for (auto it = p.values.begin(); it != p.values.end(); ++it) pf.params[it.key()] = it.value();
+    } else {
+        QFile src(presetDir() + "/" + name + ".json");
+        QString err;
+        if (!src.open(QIODevice::ReadOnly) || !PresetFile::fromJson(src.readAll(), pf, &err)) return tr("Couldn't read “%1”.").arg(name);
+        pf.name = name;
+    }
+    const QByteArray data = pf.toJson(version()); // always the current format
+    QFile out(to);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate) || out.write(data) != data.size()) return tr("Couldn't write %1.").arg(to);
+    return tr("Exported “%1”.").arg(name);
+}
+
+QString Controller::importPreset(const QUrl &file) {
+    if (m_startup.safeMode) return tr("Presets can't be imported in safe mode.");
+    const QString from = file.isLocalFile() ? file.toLocalFile() : file.toString();
+    QFile f(from);
+    PresetFile pf;
+    QString err;
+    if (!f.open(QIODevice::ReadOnly) || !PresetFile::fromJson(f.readAll(), pf, &err))
+        return err.isEmpty() ? tr("That file can't be read.") : err;
+    QString base = (pf.name.isEmpty() ? QFileInfo(from).completeBaseName() : pf.name).trimmed().replace('/', '-');
+    if (base.isEmpty()) base = tr("Imported preset");
+    // Never overwrite an existing preset: pick a free name.
+    QString name = base;
+    for (int n = 2; isBuiltinPreset(name) || QFile::exists(presetDir() + "/" + name + ".json"); ++n) name = QString("%1 (%2)").arg(base).arg(n);
+    pf.name = name;
+    QDir().mkpath(presetDir());
+    QFile out(presetDir() + "/" + name + ".json");
+    if (!out.open(QIODevice::WriteOnly)) return tr("Couldn't save the imported preset.");
+    out.write(pf.toJson(version()));
+    out.close();
+    emit presetsChanged();
+    return name == base ? tr("Imported “%1”.").arg(name) : tr("Imported as “%1” (that name was taken).").arg(name);
 }
 
 // ---------------------------------------------------------------- autostart

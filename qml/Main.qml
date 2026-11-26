@@ -314,6 +314,8 @@ ApplicationWindow {
                         n.push({ kind: "danger", text: "Muted: your apps are receiving silence.", action: "Unmute" })
                     else if (win.bypassed)
                         n.push({ kind: "warn", text: "Comparing: apps hear your RAW microphone (only input gain applied).", action: "Turn processing back on" })
+                    if (controller.presetNotice !== "")
+                        n.push({ kind: "warn", text: controller.presetNotice, action: "Dismiss" })
                     if (controller.profileNotice !== "")
                         n.push({ kind: "info", text: controller.profileNotice, action: "OK" })
                     for (var i = 0; i < controller.unavailableFeatures.length; ++i)
@@ -350,6 +352,7 @@ ApplicationWindow {
                                 case "Unmute": controller.muted = false; break
                                 case "Turn processing back on": controller.setParam("bypass", 0); break
                                 case "OK": controller.dismissProfileNotice(); break
+                                case "Dismiss": controller.dismissPresetNotice(); break
                                 default: controller.requestRestart(false)
                                 }
                             }

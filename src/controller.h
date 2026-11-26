@@ -14,6 +14,7 @@
 
 #include <QFutureWatcher>
 #include <QSettings>
+#include <QUrl>
 #include <QObject>
 #include <QQmlPropertyMap>
 #include <QTimer>
@@ -41,6 +42,7 @@ class Controller : public QObject {
     Q_PROPERTY(DetectorSpectrum *spectrum READ spectrum CONSTANT)
     // Per-microphone Setup: a message after switching mics, and the microphones that have a saved Setup.
     Q_PROPERTY(QString profileNotice READ profileNotice NOTIFY profileNoticeChanged)
+    Q_PROPERTY(QString presetNotice READ presetNotice NOTIFY presetsChanged)
     Q_PROPERTY(QVariantList micProfiles READ micProfiles NOTIFY profileNoticeChanged)
 
     Q_PROPERTY(QVariantList sources READ sources NOTIFY sourcesChanged)
@@ -111,6 +113,8 @@ public:
     MicTestSession *micTest() { return m_micTest; }
     DetectorSpectrum *spectrum() { return m_spectrum; }
     QString profileNotice() const { return m_profileNotice; }
+    QString presetNotice() const { return m_presetNotice; }
+    Q_INVOKABLE void dismissPresetNotice() { m_presetNotice.clear(); emit presetsChanged(); }
     QVariantList micProfiles() const;
     Q_INVOKABLE void dismissProfileNotice();
     QVariantList sources() const { return m_sources; }
@@ -169,6 +173,9 @@ public:
     Q_INVOKABLE void savePreset(const QString &name);
     Q_INVOKABLE void deletePreset(const QString &name);
     Q_INVOKABLE bool isBuiltinPreset(const QString &name) const;
+    // Preset files: export one to a file, import a file (returns a plain-English result).
+    Q_INVOKABLE QString exportPreset(const QString &name, const QUrl &file);
+    Q_INVOKABLE QString importPreset(const QUrl &file);
     Q_INVOKABLE void startCalibration();
     Q_INVOKABLE void skipOthers();
     Q_INVOKABLE void startLearnOthers();
@@ -224,6 +231,8 @@ private:
     QSettings m_settingsStore;
     CalibrationProfiles m_profiles;
     QString m_profileNotice;
+    QString m_presetNotice;
+    bool applyPresetFile(const QString &path, const QString &name);
     QString sourceDescription(const QString &name) const;
     QVariantMap profileParamValues() const;
     void saveProfileFor(const QString &device);
