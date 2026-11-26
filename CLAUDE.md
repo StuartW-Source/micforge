@@ -15,10 +15,10 @@ check). It exposes a virtual mic, "MicForge (processed mic)".
 
 ```bash
 ./scripts/fetch-vst3sdk.sh                    # once (or: git submodule update --init)
-mkdir -p build && cd build && qmake6 ../micforge.pro && make -j$(nproc) && cd ..
-g++ -std=c++20 -O2 -Isrc tests/dsp_test.cpp src/optional/rnnoise_api.cpp -ldl -o /tmp/dsp_test && /tmp/dsp_test
-tests/startup_test.sh build/micforge          # start-up / single-instance / safe-mode lifecycle
-tests/reconnect_test.sh build/micforge        # PipeWire loss + recovery (private PipeWire daemon)
+cmake -B build-cmake -G Ninja && cmake --build build-cmake
+ctest --test-dir build-cmake --output-on-failure   # dsp, audiocore, privacy, calibprofiles, autostart,
+                                                   # startup lifecycle, PipeWire reconnect (private daemon)
+# qmake still works too: mkdir -p build && cd build && qmake6 ../micforge.pro && make -j$(nproc)
 ```
 
 Plugin-host tests and the recordings analyser are described in `docs/TESTING.md`.
@@ -49,6 +49,9 @@ Plugin-host tests and the recordings analyser are described in `docs/TESTING.md`
 | `src/audio/audiobackend.h`, `pipewirebackend.*` | `IAudioBackend` + PipeWire implementation: capture, virtual mic, monitor, default device, reconnection |
 | `src/platform/` | `IAutostart` (XDG), run-time library loading (`dynlib.h`) |
 | `src/controller.*` | QML-facing state: params, presets, calibration, app state/mute, engine lifecycle |
+| `src/diagnostics.*`, `src/privacy.h` | Diagnostics page data and the privacy-scrubbed report |
+| `src/mictest.*`, `src/levels.h` | Mic test session; level analysis (shared with Setup) |
+| `src/calibprofiles.*` | Per-microphone Setup profiles |
 | `src/startup.*` | Logging, single instance, crash-loop guard / safe mode, settings backups, signals |
 | `src/optional/` | Run-time loading of optional libraries (rnnoise, lilv) via `src/platform/dynlib.h` |
 | `src/plugins/`, `src/pluginmanager.*` | VST3 + LV2 hosting, plugin chain management |
@@ -61,8 +64,8 @@ No allocation, locks, file/console I/O, Qt signals or blocking calls. UI → aud
 
 ## Conventions
 
-C++20, Qt 6, qmake (verified) with a CMake build alongside (`CMakeLists.txt`, keep both source lists in
-sync until qmake is retired). QML: take every colour, spacing and font size from `Theme` (no hex
+C++20, Qt 6. CMake (`cmake -B build-cmake -G Ninja`, `ctest`) and qmake both build; keep both source
+lists in sync until qmake is retired. QML: take every colour, spacing and font size from `Theme` (no hex
 literals); use `MfComboBox`/`MfTextField`/`MfMenu*` rather than raw Controls; make custom controls
 focusable (`activeFocusOnTab`, Space/Enter, `FocusRing`, `Accessible.name`). Plain-English, neutral UI wording (no
 assumptions about who else is in the room). Keep DSP free of Qt/PipeWire types.

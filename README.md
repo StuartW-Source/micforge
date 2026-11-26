@@ -32,6 +32,8 @@ input device in Discord, OBS or any other app, and everyone hears your processed
   (also in the tray and on Ctrl+M).
 - An **Overview** page that shows at a glance what your apps are hearing, plus pages for Voice
   Isolation, Effects, Audio Devices, Presets and Settings. Light and dark themes, full keyboard control.
+- A **Mic Test** to hear your raw mic and the processed result side by side, and a **Diagnostics** page
+  with a shareable report that leaves out personal details. Each microphone keeps its own Setup.
 - Runs in the system tray, and can start automatically when you log in (Settings → Startup).
 
 | Effect Library | Voice Changer | Plugins |

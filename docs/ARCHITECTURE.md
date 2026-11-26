@@ -46,11 +46,34 @@ to the UI thread. The backend is chosen at build time (`createAudioBackend`), no
 `processing`, with `muted` and `bypassed` overriding `processing`. The header, tray icon and notices all
 read this one value.
 
+## Diagnostics, mic test and calibration profiles (Phase 3)
+
+- **`AudioCore::stats`** (`EngineStats`): written only by the audio thread with relaxed atomics; the UI
+  reads them and resets the "max since last read" values with `exchange`. Timing uses `steady_clock`
+  (vDSO, real-time safe). A block arriving more than two block-lengths (+2 ms) after the previous one
+  counts as late; gaps over 1 s are pauses, and `resetChain()` clears the reference time so a stream
+  restart isn't counted. Clipping is measured on the raw device samples of the selected channel, before
+  input gain, because that's the clipping software can't undo.
+- **Mic test** (`AudioCore::test`, `MicTestSession`): the UI thread allocates both buffers while idle; the
+  audio thread writes raw (channel + input gain) and processed samples at the same index, so the takes are
+  time-aligned. Playback is read by `readMonitor` only; the virtual mic path never touches the test
+  buffers. Live "Listen" and playback share the monitor stream: `Controller::updateMonitorStream()` keeps
+  it open while either needs it; while playing, the live signal isn't sent to the monitor.
+- **Diagnostics** (`src/diagnostics.*`) polls once a second only while its page is visible. Personal
+  details are removed by `src/privacy.h` (pure functions, unit-tested): home folder → `~`, computer name
+  (first, since it often contains the user name) and user name → placeholders as whole words in any case,
+  paths → last component, device names → their type unless the user opts in.
+- **Calibration profiles** (`src/calibprofiles.*`): the active Setup is still `calib/*` settings plus
+  `calib/{room,you,others}.f32`; profiles are copies in `calib/devices/<sha1(device)>/` with a
+  `profile.ini`. `calib/device` records which mic the active Setup belongs to. On a mic switch the
+  outgoing Setup is saved before anything is restored; files are replaced via a temporary file. Profiles
+  hold only mic/room parameters (`CalibrationProfiles::profileParams`), never sound-preset ones.
+
 ## UI structure (Phase 2)
 
 `Main.qml` holds the header (status, Mute, Listen, Compare), the sidebar and page notices, and loads each
 page on first visit (`OverviewPage`, `IsolationPage`, `EffectsPage`, `DevicesPage`, `PresetsPage`,
-`SettingsPage`). Effect panels (`Stage*.qml`, built on `StagePanel`) are reused unchanged by the Effects,
+`SettingsPage`, and from Phase 3 `MicTestPage`, `DiagnosticsPage`). Effect panels (`Stage*.qml`, built on `StagePanel`) are reused unchanged by the Effects,
 Voice Isolation and Audio Devices pages. Pages get the window as `app` for shared helpers
 (`stageDefs`, `openSetup()`, `openStage(id)`, `navigate(id)`).
 

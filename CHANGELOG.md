@@ -21,6 +21,16 @@ All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); ve
 - The login entry is no longer re-pointed at development builds.
 
 ### Added
+- **Diagnostics** page: problems in plain English, audio engine and devices, sample rate, block size,
+  latency, processing load, glitch counters (late audio, dropouts, clipping), plugin errors and the log.
+  **Copy or save a report** to share when asking for help: it never contains audio, and your home folder,
+  user name, computer name, preset names and plugin locations are removed (device names and log lines
+  only if you tick them).
+- **Mic Test** page: record yourself once and compare the raw mic with MicForge's processed sound, played
+  only to your speakers or headphones and matched in loudness, with waveforms, level readings, advice, and
+  WAV export.
+- **Each microphone keeps its own Setup.** Switching microphones loads that microphone's Setup.
+- Setup now warns when your mic clipped while you talked, or when your voice is barely above the room noise.
 - **Safe mode** (`--safe-mode`, Settings → Troubleshooting): starts without plugins and with default sound
   settings and saves nothing. Entered automatically after two failed starts in a row.
 - Rotating log file (`~/.local/state/MicForge/MicForge/micforge.log`) and journal messages.
@@ -29,7 +39,8 @@ All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); ve
 - Command-line options: `--help`, `--version`, `--minimized`, `--safe-mode`, `--replace`.
 - Tests: `tests/startup_test.sh`, `tests/reconnect_test.sh`, `tests/autostart_test.cpp`, mute checks in
   the DSP tests.
-- CMake build (`CMakeLists.txt`) alongside qmake.
+- CMake build (`CMakeLists.txt`) alongside qmake, with ctest. Tests: `audiocore`, `privacy`,
+  `calibprofiles`, level analysis in `dsp`.
 - Project docs: CLAUDE.md, ROADMAP, ARCHITECTURE, CROSS_PLATFORM, WINDOWS_RESEARCH, TESTING, TROUBLESHOOTING.
 
 - **New layout** with a sidebar: Overview, Voice Isolation, Effects, Audio Devices, Presets and Settings

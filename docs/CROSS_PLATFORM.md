@@ -53,7 +53,7 @@ Verified after the extraction: start-up 9/9, reconnect 3/3, DSP, autostart 6/6.
 
 ## Build-time selection
 
-CMake options (in `CMakeLists.txt`, not yet built on this machine): `MICFORGE_BACKEND=pipewire` (the only
+CMake options (in `CMakeLists.txt`, verified on Linux): `MICFORGE_BACKEND=pipewire` (the only
 backend so far; `wasapi` planned), `MICFORGE_WITH_LV2` (default ON on Linux; OFF uses
 `src/plugins/lv2_disabled.cpp`), `MICFORGE_WITH_VST3` (ON), `MICFORGE_BUILD_TESTS`. The DSP test builds
 without Qt or a backend.

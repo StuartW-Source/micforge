@@ -79,6 +79,11 @@ whether a USB mic, headset, or one channel of a multi-input audio interface.
 - R2.10 When the analysis improves in a new version, saved setups are re-tuned automatically from
   the saved recordings.
 
+- R2.10 Each microphone keeps its own Setup; switching microphones restores it, and no microphone's Setup
+  is ever lost by switching.
+- R2.11 Setup detects clipping before MicForge (in the mic or interface) and a voice too close to the room
+  noise, and says how to fix it.
+
 ## R3. Effects
 
 - R3.1 Every effect is optional and **removable**, except Input and Output. Effects are added from an
@@ -152,6 +157,12 @@ whether a USB mic, headset, or one channel of a multi-input audio interface.
 - R7.6 Settings and calibration are never silently deleted: daily backups, damaged files preserved,
   invalid values fall back to defaults.
 - R7.7 Start-up problems are diagnosable: rotating log file, journal messages, visible error dialogs.
+- R7.9 A Diagnostics page shows engine state, devices, sample rate, block size, latency, processing load,
+  glitch counters, plugin errors and the log, and lists problems in plain English.
+- R7.10 Diagnostic reports never contain audio or recordings, and always remove the home folder, user and
+  computer names, preset names and file paths. Device names and log lines are included only on request.
+- R7.11 A mic test records raw and processed sound together and plays either back to the user only
+  (never to apps using the virtual mic), loudness-matched, with WAV export on request.
 - R7.8 Start at login uses XDG autostart only (no competing systemd service). It works when the tray
   isn't ready yet, and the entry always points at an installed copy.
 

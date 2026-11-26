@@ -1,8 +1,8 @@
 # MicForge roadmap
 
 Living document. Phases follow the development brief; each phase needs approval before it starts.
-Status: **Phase 1 complete (pending a real reboot/login confirmation by the user). Phase 2 complete on branch
-`phase2-architecture-ui` (CMake build not yet verified: cmake isn't installed). Phase 3 awaiting approval.**
+Status: **Phase 1 complete (pending a real reboot/login confirmation by the user). Phase 2 complete
+(`phase2-architecture-ui`). Phase 3 complete on branch `phase3-diagnostics`. Phase 4 awaiting approval.**
 
 ---
 
@@ -111,7 +111,7 @@ Severity: 🔴 high, 🟠 medium, 🟢 low.
 
 | Item | Result |
 |---|---|
-| CMake build alongside qmake | `CMakeLists.txt` written (options `MICFORGE_BACKEND`, `MICFORGE_WITH_LV2/VST3`, `MICFORGE_BUILD_TESTS`, ctest). **Not yet built**: cmake/ninja aren't installed (`sudo pacman -S cmake ninja`). qmake remains the verified build until then. |
+| CMake build alongside qmake | `CMakeLists.txt` (options `MICFORGE_BACKEND`, `MICFORGE_WITH_LV2/VST3`, `MICFORGE_BUILD_TESTS`, ctest). Verified at the start of Phase 3 (CMake 4.5, Ninja): clean build, all ctest suites pass, rnnoise/lilv not linked. |
 | Platform seams | `AudioCore` (platform-independent processing, rings, meters, plugin rack) + `IAudioBackend` / `PipeWireBackend`; `IAutostart` / `XdgAutostart`. Default-device tracking moved into the backend (PipeWire `default` metadata; no more `pactl`). `IPlatformPaths` **not** added: `QStandardPaths` already covers both platforms. |
 | Split `Controller` | Audio I/O, default device and autostart moved out. Calibration and presets stay in `Controller` for now: splitting them adds churn without enabling anything yet; revisit when Phase 3 (calibration) or Phase 5 (versioned presets) changes them. |
 | Mute + state model | `mute` parameter (10 ms fade, never saved/preset), `appState` = disconnected / connecting / no-input / muted / bypassed / processing, shown in the header, the tray (icon overlay + menu) and page notices. Ctrl+M. |
@@ -124,11 +124,20 @@ desktop theme switch, fractional-scaling displays.
 
 ## Proposed priorities for the remaining phases
 
-### Phase 3 — Diagnostics, recording and calibration
-Diagnostics screen (engine, devices, rate/quantum, measured callback time, xruns, plugin errors, log
-viewer, copy/export report without personal data). Mic test workspace (raw + processed capture, matched
-playback that can't reach the virtual mic, WAV export, waveforms). Calibration: per-device profiles,
-dynamic range and clipping analysis, re-run individual stages.
+### Phase 3 — Diagnostics, recording and calibration ✅ (2026-11-26)
+
+| Item | Result |
+|---|---|
+| Engine measurements | `AudioCore::stats` (lock-free): block size, processing time (avg/max), load, late input blocks, virtual-mic and monitor underruns, input clipping before gain. PipeWire adds graph rate and input/output latency (`pw_stream_get_time_n`). Real xrun counts from the PipeWire driver aren't exposed to clients; late blocks and underruns are what MicForge can observe itself. |
+| Diagnostics page | Problems in plain English, engine, devices, timing with load bars, glitch counters (resettable), plugin errors, optional features, log viewer. |
+| Report | Copy / save / preview. Always removes home folder, user and computer names, preset names, plugin paths; device names and log lines only when ticked; never audio. Verified with `tests/privacy_test.cpp` and a real report from the test instance. |
+| Mic test | 5–30 s simultaneous raw + processed takes; playback to the monitor output only (tested: never reaches the virtual mic); loudness matching; waveforms; level analysis (peak, speech, background, voice above background) with findings; 16-bit WAV export; in memory until exported. |
+| Calibration | Per-microphone Setup profiles (saved on Setup, restored on mic switch, nothing deleted). Setup flags input clipping during "Your voice" and a low voice-to-room level. Re-running individual steps already existed (R2.8). |
+| Controller split | Diagnostics, mic test and profiles are separate classes (`src/diagnostics.*`, `src/mictest.*`, `src/calibprofiles.*`), not more Controller code. |
+
+Not verified: the Setup results screen with the new level rows (needs a real Setup run, which records
+the room), the save-file and folder dialogs (portal dialogs can't run offscreen), playback audibility on
+real speakers.
 
 ### Phase 4 — Voice isolation and DSP
 Gate decision explanation ("opened: level + closeness"), detector spectrum view, adaptive noise floor,
