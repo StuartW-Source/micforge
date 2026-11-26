@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
     check(body.contains("Exec=\"" + QCoreApplication::applicationFilePath().toUtf8() + "\" --minimized"), "entry runs this binary, hidden");
     a->setEnabled(true, false);
     f.close();
-    f.open(QIODevice::ReadOnly);
+    if (!f.open(QIODevice::ReadOnly)) { std::printf("cannot reopen entry\n"); return 1; }
     check(!f.readAll().contains("--minimized"), "start-visible option removes --minimized");
     a->setEnabled(false, true);
     check(!a->enabled() && !QFile::exists(path), "disabling removes the entry");
