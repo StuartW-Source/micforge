@@ -26,6 +26,9 @@ All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); ve
 - **Undo / redo** for every sound setting (Ctrl+Z, Ctrl+Shift+Z, or the arrows at the top).
 - **System-wide shortcuts:** mute and **push-to-talk** from any app (Settings → Keyboard shortcuts).
 - Plugins: block list, a progress bar and Stop for plugin searches, CPU use per plugin, and presets per plugin.
+- **Plugins can run separately** ("Run separately", on by default for VST3): if a plugin crashes or freezes,
+  MicForge and your processed mic keep working and the plugin restarts by itself.
+- **VST3 plugins can open their own window** (when running separately).
 - Presets are included in the daily backup.
 - **No more clicks** when you move a slider, switch an effect on or off, or use Compare: every change glides.
 - **True-peak limiter:** the output never goes over the ceiling, even between samples.

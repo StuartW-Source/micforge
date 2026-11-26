@@ -9,6 +9,7 @@
 | PipeWire loop (non-RT events) | Registry/state/core-error callbacks | Must not tear down PipeWire objects from inside callbacks; marshal to UI thread |
 | Worker (`QtConcurrent`) | Voice-separation analysis | Pure computation on copied buffers |
 | Helper process | `micforge --scan-vst3 <bundle>` | Isolates VST3 scanning crashes |
+| Helper process | `micforge --plugin-host …` (one per separate plugin) | Runs a plugin (and its window); audio via shared memory |
 
 Communication: UI → audio via `Params` (atomic floats + version counter), `ParamQueue` (plugins),
 `PluginRack` slots (atomic pointers + `busy` flag for safe hand-over). Audio → UI via `Meters` (atomics,
@@ -101,7 +102,10 @@ read this one value.
 - **Global shortcuts** (`src/platform/globalshortcuts*.{h,cpp}`): `IGlobalShortcuts`, XDG portal
   implementation over Qt D-Bus (request/response signals subscribed before each call).
 - **Plugins**: `PluginRack::load[]` per-slot CPU share (steady_clock around each `process`); block list in
-  settings; plugin presets as files. Out-of-process hosting evaluated in docs/PLUGIN_HOSTING.md.
+  settings; plugin presets as files.
+- **Out-of-process plugins** (`src/plugins/bridge.*`, `src/plugins/remoteplugin.*`): see
+  docs/PLUGIN_HOSTING.md. The audio thread's only extra work is a memcpy, a futex wake and a bounded futex
+  wait per block per separate plugin.
 
 ## UI structure (Phase 2)
 

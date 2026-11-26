@@ -1,9 +1,8 @@
 # MicForge roadmap
 
 Living document. Phases follow the development brief; each phase needs approval before it starts.
-Status: **Phases 1-4 complete and merged to `main` (reboot/login autostart confirmed 2026-11-26). Phase 5
-complete on branch `phase5-presets` except plugin editor windows / out-of-process hosting, which await
-approval (see docs/PLUGIN_HOSTING.md).**
+Status: **Phases 1-4 merged to `main`. Phase 5 complete on branch `phase5-presets` (LV2 plugin windows
+deferred: they need suil). Paused after Phase 5 at the user's request.**
 
 ---
 
@@ -172,7 +171,8 @@ tests plus one user's recordings); the voice detector on voices other than the u
 | Backups | Presets copied daily with the settings (14 days). |
 | Global shortcuts | GlobalShortcuts portal (Qt D-Bus): mute toggle, push-to-talk (press/release). Off by default; binding only when switched on. |
 | Plugins | Block list, scan progress + stop, per-plugin CPU, plugin presets. |
-| Editor windows, out-of-process hosting | **Evaluated, not built** (docs/PLUGIN_HOSTING.md): needs an X11 helper process; recommended design is a per-plugin bridge process with deadline fallback. Awaiting approval. |
+| Out-of-process hosting | **Built** (option C, docs/PLUGIN_HOSTING.md): per-plugin helper process, shared memory + futex with a half-block deadline, automatic restart; +2.1 µs per block; identical output; crash-safe. Default on for VST3. |
+| Editor windows | **VST3 built** (X11 via XWayland in the helper). LV2 windows need suil (new dependency, not added). |
 
 Tests added: presetfile (14), undostack (10), controller (24: undo, presets, import/export, shortcuts and
 push-to-talk with a fake portal), audiocore plugin CPU (3), startup preset backup. Not verified: the

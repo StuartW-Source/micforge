@@ -1,6 +1,36 @@
 # Plugin editor windows and out-of-process hosting: evaluation (Phase 5)
 
-Status: **evaluation only, awaiting approval.** Nothing here is implemented yet.
+Status: **option C approved and built (2026-11-26)**, steps 1 and 2. Step 3 (LV2 windows via suil) not
+started: it needs a new dependency.
+
+## What was built
+
+- `micforge --plugin-host <shm> <format> <id> <path> <rate> [name]` (src/plugins/remoteplugin.cpp): loads
+  one plugin, processes blocks on a thread that asks for SCHED_FIFO, dies with MicForge (PR_SET_PDEATHSIG).
+- Audio: `src/plugins/bridge.*`, POSIX shared memory + futexes; deadline = half a block; a missed block
+  passes dry and is counted; a late result is dropped. Control: JSON lines on the helper's stdin/stdout
+  (`set`, `editor`, `quit` / `ready`, `value`, `editorClosed`, `log`, `error`).
+- `RemotePlugin` is an ordinary `PluginInstance` for the rack. A helper with no heartbeat for 3 s while a
+  block waits is killed. `PluginManager` restarts a crashed helper with its settings; after 3 crashes in
+  10 minutes it switches the plugin off.
+- Per plugin "Run separately" (default on for VST3, off for LV2), saved with the chain.
+- VST3 windows: the helper runs Qt's xcb platform (XWayland) and embeds `IPlugView`
+  (`X11EmbedWindowID`), with an `IPlugFrame` (fixed to the plugin's size) and a Linux `IRunLoop` on
+  Qt's event loop; `IComponentHandler` sends edits made in the window to the processor and to MicForge.
+
+## Measured
+
+| | Result |
+|---|---|
+| Round trip per block (bridge_test, two processes) | median 5.0 µs, p99 11 µs |
+| Extra time per 256-frame block, Calf Filter (remoteplugin_test) | +2.1 µs (the block lasts 5333 µs) |
+| Output vs in-process | identical (max difference 0) |
+| Killed helper | reported; audio passes through untouched; caller unaffected |
+| LSP Compressor Mono VST3 window (manual, plugin_editor_check) | opened at the plugin's 944×548 on XWayland; 0 blocks missed with it open; closes on request |
+
+Not verified: that the window's contents draw correctly (no desktop screenshots are taken), edits made in
+the window by hand, restart-after-crash inside the full app (covered piecewise by the tests above).
+
 
 ## Where we are
 
