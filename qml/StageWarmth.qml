@@ -3,7 +3,7 @@ import QtQuick.Layouts
 
 StagePanel {
     title: "Warmth"
-    accent: "#ff7b5c"
+    accent: Theme.warmth
     enableParam: "warmthOn"
     effectName: "warmth"
     visualWidth: 0
@@ -12,7 +12,7 @@ StagePanel {
 
     ParamSlider {
         paramKey: "warmthAmount"; label: "Amount"; from: 0; to: 100; stepSize: 1
-        accent: "#ff7b5c"
+        accent: Theme.warmth
         format: (v) => Math.round(v) + " %"
     }
 }

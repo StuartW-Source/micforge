@@ -5,7 +5,7 @@ import QtQuick.Layouts
 StagePanel {
     id: root
     title: "Plugins"
-    accent: "#4dd0e1"
+    accent: Theme.plugins
     enableParam: "pluginsOn"
     effectName: "plugins"
     visualWidth: 0
@@ -30,7 +30,7 @@ StagePanel {
                 text: "Add plugin"
                 icon: "+"
                 primary: true
-                accent: "#4dd0e1"
+                accent: Theme.plugins
                 enabled: root.pm.chain.length < root.pm.maxPlugins
                 onClicked: browser.open()
             }
@@ -44,7 +44,7 @@ StagePanel {
             Layout.fillWidth: true
             implicitHeight: 90
             radius: 12
-            color: "#0e1015"
+            color: Theme.well
             border.color: Theme.border
             Text {
                 anchors.centerIn: parent
@@ -66,7 +66,7 @@ StagePanel {
                 implicitHeight: cardCol.implicitHeight + 24
                 radius: 12
                 color: Theme.cardHi
-                border.color: modelData.error ? Theme.danger : (modelData.bypass ? Theme.border : Qt.rgba(0.30, 0.82, 0.88, 0.45))
+                border.color: modelData.error ? Theme.danger : (modelData.bypass ? Theme.border : Theme.alpha(Theme.plugins, 0.45))
 
                 ColumnLayout {
                     id: cardCol
@@ -77,14 +77,14 @@ StagePanel {
                         spacing: 10
                         Rectangle {
                             width: 24; height: 24; radius: 12
-                            color: Qt.rgba(0.30, 0.82, 0.88, 0.18)
-                            Text { anchors.centerIn: parent; text: index + 1; color: "#4dd0e1"; font.bold: true; font.pixelSize: 11 }
+                            color: Theme.alpha(Theme.plugins, 0.18)
+                            Text { anchors.centerIn: parent; text: index + 1; color: Theme.plugins; font.bold: true; font.pixelSize: 11 }
                         }
                         Rectangle {
                             width: 44; height: 20; radius: 6
-                            color: modelData.format === "VST3" ? Qt.rgba(1, 0.62, 0.26, 0.2) : Qt.rgba(0.36, 0.66, 1, 0.2)
+                            color: modelData.format === "VST3" ? Theme.alpha(Theme.voice, 0.2) : Theme.alpha(Theme.input, 0.2)
                             Text { anchors.centerIn: parent; text: modelData.format; font.pixelSize: 10; font.bold: true
-                                   color: modelData.format === "VST3" ? "#ff9f43" : Theme.input }
+                                   color: modelData.format === "VST3" ? Theme.voice : Theme.input }
                         }
                         ColumnLayout {
                             Layout.fillWidth: true
@@ -106,7 +106,7 @@ StagePanel {
                         ToggleSwitch {
                             visible: modelData.loaded
                             checked: !modelData.bypass
-                            accent: "#4dd0e1"
+                            accent: Theme.plugins
                             onToggled: (on) => root.pm.setBypass(index, !on)
                         }
                         PillButton { text: "Remove"; implicitHeight: 26; onClicked: { root.expanded = ({}); root.pm.remove(index) } }

@@ -70,6 +70,15 @@ ColumnLayout {
         onMoved: controller.setParam(root.paramKey, root.fromPos(position))
         implicitHeight: 22
         padding: 0
+        activeFocusOnTab: true
+        Accessible.name: root.label
+        // Keyboard: arrow keys move 1%, Page Up/Down 10%, Home resets to the default.
+        stepSize: 0.01
+        Keys.onPressed: (e) => {
+            var step = e.key === Qt.Key_PageUp ? 0.1 : e.key === Qt.Key_PageDown ? -0.1 : 0
+            if (step !== 0) { controller.setParam(root.paramKey, root.fromPos(Math.max(0, Math.min(1, position + step)))); e.accepted = true }
+            else if (e.key === Qt.Key_Home) { controller.resetParam(root.paramKey); e.accepted = true }
+        }
 
         background: Item {
             x: slider.leftPadding
@@ -91,10 +100,11 @@ ColumnLayout {
             x: slider.leftPadding + slider.visualPosition * (slider.availableWidth - width)
             y: slider.topPadding + slider.availableHeight / 2 - height / 2
             width: 16; height: 16; radius: 8
-            color: slider.pressed ? "#ffffff" : Theme.text
+            color: slider.pressed ? Theme.knobPressed : Theme.knob
             border.color: root.accent
             border.width: 3
             opacity: root.enabled ? 1 : 0.4
+            FocusRing { target: slider; radius: 11 }
         }
     }
 }

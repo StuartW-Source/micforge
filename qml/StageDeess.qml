@@ -4,7 +4,7 @@ import QtQuick.Layouts
 StagePanel {
     id: root
     title: "De-esser"
-    accent: "#c9a0ff"
+    accent: Theme.deess
     enableParam: "deessOn"
     effectName: "deess"
     visualWidth: 160
@@ -26,14 +26,14 @@ StagePanel {
             reduction: controller.deessReduction
             maxDb: 24
             label: "TAMED"
-            accent: "#c9a0ff"
+            accent: Theme.deess
         }
         ColumnLayout {
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignTop
             spacing: 2
             Text { text: "Taming by"; color: Theme.textFaint; font.pixelSize: 11 }
-            Text { text: root.held.toFixed(1) + " dB"; color: "#c9a0ff"; font.pixelSize: 22; font.weight: Font.Bold; font.family: Theme.mono }
+            Text { text: root.held.toFixed(1) + " dB"; color: Theme.deess; font.pixelSize: 22; font.weight: Font.Bold; font.family: Theme.mono }
             Text {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
@@ -45,19 +45,19 @@ StagePanel {
 
     ParamSlider {
         paramKey: "deessThreshold"; label: "Sensitivity (threshold)"; from: -60; to: 0; stepSize: 0.5
-        accent: "#c9a0ff"
+        accent: Theme.deess
         format: (v) => Theme.fmtDb(v)
         help: "Lower = reacts to quieter S sounds. Set it so it only moves on S/T sounds, not on normal vowels."
     }
     ParamSlider {
         paramKey: "deessMax"; label: "Max reduction"; from: 0; to: 24; stepSize: 0.5
-        accent: "#c9a0ff"
+        accent: Theme.deess
         format: (v) => v.toFixed(1) + " dB"
         help: "The most it will turn the esses down. 4–8 dB is usually plenty; more can make you sound lispy."
     }
     ParamSlider {
         paramKey: "deessFreq"; label: "Frequency"; from: 2500; to: 12000; logScale: true; stepSize: 50
-        accent: "#c9a0ff"
+        accent: Theme.deess
         format: (v) => Theme.fmtHz(v)
         help: "Where the harshness lives. Most voices: 5–8 kHz. Lower voices often sit nearer 5 kHz."
     }

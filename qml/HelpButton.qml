@@ -6,6 +6,13 @@ Rectangle {
     id: root
     property string text: ""
     width: 18; height: 18; radius: 9
+    activeFocusOnTab: true
+    Accessible.role: Accessible.Button
+    Accessible.name: "Help"
+    Accessible.description: text
+    Keys.onSpacePressed: tip.visible = !tip.visible
+    Keys.onReturnPressed: tip.visible = !tip.visible
+    Keys.onEscapePressed: tip.visible = false
     color: hover.hovered || tip.visible ? Theme.cardHi : "transparent"
     border.color: Theme.border
 
@@ -21,7 +28,7 @@ Rectangle {
 
     ToolTip {
         id: tip
-        visible: hover.hovered
+        visible: hover.hovered || root.activeFocus
         delay: 250
         width: Math.min(320, implicitContentWidth + 24)
         contentItem: Text {
@@ -31,6 +38,7 @@ Rectangle {
             font.pixelSize: 12
             lineHeight: 1.2
         }
-        background: Rectangle { color: "#0d0f13"; border.color: Theme.border; radius: 8 }
+        background: Rectangle { color: Theme.tooltip; border.color: Theme.border; radius: 8 }
     }
+    FocusRing {}
 }

@@ -24,7 +24,7 @@ Item {
         anchors { left: parent.left; right: parent.right; top: parent.top }
         height: 30
         radius: 6
-        color: "#0e1015"
+        color: Theme.well
         border.color: Theme.border
         clip: true
 

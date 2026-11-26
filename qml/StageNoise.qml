@@ -4,7 +4,7 @@ import QtQuick.Layouts
 StagePanel {
     id: root
     title: "AI Noise Removal"
-    accent: "#7ee0c3"
+    accent: Theme.noise
     enableParam: "noiseOn"
     effectName: "noise"
     visualWidth: 220
@@ -15,6 +15,24 @@ StagePanel {
     Connections {
         target: controller
         function onMetersChanged() { root.vad = Math.max(controller.noiseVad, root.vad - 0.04) }
+    }
+
+    // Shown when the optional rnnoise library isn't installed (MicForge still runs; this stage passes audio through).
+    Rectangle {
+        visible: !controller.noiseRemovalAvailable
+        Layout.fillWidth: true
+        Layout.columnSpan: root.columns
+        implicitHeight: unavailText.implicitHeight + 20
+        radius: 8
+        color: Theme.alpha(Theme.warn, 0.10)
+        border.color: Theme.alpha(Theme.warn, 0.45)
+        Text {
+            id: unavailText
+            anchors { fill: parent; margins: 10 }
+            wrapMode: Text.WordWrap
+            color: Theme.text; font.pixelSize: 12
+            text: "AI Noise Removal isn't available: the “rnnoise” package isn't installed, so this effect currently lets your audio through unchanged. Install it (sudo pacman -S rnnoise) and restart MicForge."
+        }
     }
 
     visual: ColumnLayout {
@@ -29,7 +47,7 @@ StagePanel {
             Rectangle {
                 height: parent.height; radius: 9
                 width: parent.width * root.vad
-                color: "#7ee0c3"
+                color: Theme.noise
                 Behavior on width { NumberAnimation { duration: 60 } }
             }
         }
@@ -50,7 +68,7 @@ StagePanel {
 
     ParamSlider {
         paramKey: "noiseAmount"; label: "Strength"; from: 0; to: 100; stepSize: 1
-        accent: "#7ee0c3"
+        accent: Theme.noise
         format: (v) => Math.round(v) + " %"
         help: "How much of the cleaned signal you hear. 100% = fully cleaned. Lower blends some of the original back in for a more natural sound."
     }

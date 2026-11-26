@@ -19,6 +19,7 @@ Canvas {
                                  p.eq4Freq, p.eq4Gain, p.eq4Q, p.eq5Freq, p.eq5Gain, p.eq5Q]
     onDepsChanged: requestPaint()
     onWidthChanged: requestPaint()
+    Connections { target: Theme; function onDarkChanged() { requestPaint() } }
     onHeightChanged: requestPaint()
 
     implicitHeight: 90
@@ -55,9 +56,9 @@ Canvas {
         ctx.reset()
         var W = width, H = height
 
-        ctx.fillStyle = "#0e1015"
+        ctx.fillStyle = Theme.well
         ctx.fillRect(0, 0, W, H)
-        ctx.strokeStyle = "#252a34"
+        ctx.strokeStyle = Theme.grid
         ctx.lineWidth = 1
         ;[50, 100, 200, 500, 1000, 2000, 5000, 10000].forEach(function(f) {
             ctx.beginPath(); ctx.moveTo(xOf(f), 0); ctx.lineTo(xOf(f), H); ctx.stroke()
@@ -67,10 +68,10 @@ Canvas {
                 ctx.beginPath(); ctx.moveTo(0, yOf(g)); ctx.lineTo(W, yOf(g)); ctx.stroke()
             }
         }
-        ctx.strokeStyle = "#3a4050"
+        ctx.strokeStyle = Theme.borderHi
         ctx.beginPath(); ctx.moveTo(0, yOf(0)); ctx.lineTo(W, yOf(0)); ctx.stroke()
 
-        ctx.fillStyle = "#6b7385"
+        ctx.fillStyle = Theme.textFaint
         ctx.font = "9px sans-serif"
         ;[[100, "100"], [1000, "1k"], [10000, "10k"]].forEach(function(t) { ctx.fillText(t[1], xOf(t[0]) + 3, H - 4) })
         if (showDbScale) {
@@ -107,7 +108,7 @@ Canvas {
         ctx.lineWidth = 2
         ctx.stroke()
         ctx.lineTo(W, yOf(0)); ctx.lineTo(0, yOf(0)); ctx.closePath()
-        ctx.fillStyle = Qt.rgba(accent.r, accent.g, accent.b, 0.15)
+        ctx.fillStyle = Theme.alpha(accent, 0.15)
         ctx.fill()
     }
 }

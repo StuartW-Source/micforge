@@ -7,7 +7,7 @@ ColumnLayout {
     id: root
     property int slot: 0
     property var p: ({})               // parameter description from PluginManager.params()
-    property color accent: "#4dd0e1"
+    property color accent: Theme.plugins
     readonly property var pm: controller.plugins
     readonly property real value: (pm.revision, pm.value(slot, p.index))
 
@@ -45,7 +45,7 @@ ColumnLayout {
         }
     }
 
-    ComboBox {
+    MfComboBox {
         visible: !root.p.toggle && (root.p.choices || []).length > 0
         Layout.fillWidth: true
         model: root.p.choices || []
@@ -79,7 +79,7 @@ ColumnLayout {
             x: slider.leftPadding + slider.visualPosition * (slider.availableWidth - width)
             y: slider.topPadding + slider.availableHeight / 2 - height / 2
             width: 16; height: 16; radius: 8
-            color: slider.pressed ? "#ffffff" : Theme.text
+            color: slider.pressed ? Theme.knobPressed : Theme.knob
             border.color: root.accent
             border.width: 3
         }

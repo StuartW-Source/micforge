@@ -93,6 +93,7 @@ protected:
 
 // Discovery. LV2 reads metadata only (safe). VST3 loads each bundle in a separate
 // "micforge --scan-vst3 <bundle>" process so a crashing plugin can't take MicForge down.
+bool lv2Available(QString *why = nullptr); // false if the optional lilv library isn't installed
 std::vector<PluginInfo> scanLv2();
 std::vector<QString> vst3Bundles();
 std::vector<PluginInfo> scanVst3Bundle(const QString &bundlePath); // used by the --scan-vst3 helper

@@ -32,8 +32,8 @@ Item {
         radius: 11
         gradient: Gradient {
             orientation: Gradient.Horizontal
-            GradientStop { position: 0; color: Qt.rgba(Theme.tone.r, Theme.tone.g, Theme.tone.b, 0.25) }
-            GradientStop { position: 1; color: Qt.rgba(Theme.gate.r, Theme.gate.g, Theme.gate.b, 0.25) }
+            GradientStop { position: 0; color: Theme.alpha(Theme.tone, 0.25) }
+            GradientStop { position: 1; color: Theme.alpha(Theme.gate, 0.25) }
         }
         border.color: Theme.border
         opacity: root.enabledCheck ? 1 : 0.5
@@ -50,19 +50,33 @@ Item {
             y: (parent.height - height) / 2
             width: 14; height: 14; radius: 7
             color: Theme.text
-            border.color: "#10131a"; border.width: 2
+            border.color: Theme.onAccent; border.width: 2
             Behavior on x { NumberAnimation { duration: 80 } }
         }
     }
     Text { anchors { left: parent.left; top: bar.bottom; topMargin: 5 } text: "← far away"; color: Theme.textFaint; font.pixelSize: 10 }
+    // Label centres for "others" and "you", pushed apart when the two marks are close together.
+    function clampX(x, w) { return Math.max(60, Math.min(bar.width - w - 60, x)) }
+    readonly property var labelX: {
+        var co = xOf(othersMark), cy = xOf(youMark), wo = othersLabel.width, wy = youLabel.width
+        var need = (wo + wy) / 2 + 6
+        if (hasOthersMark && hasMarks && Math.abs(co - cy) < need) {
+            var mid = (co + cy) / 2, dir = co <= cy ? -1 : 1
+            co = mid + dir * need / 2
+            cy = mid - dir * need / 2
+        }
+        return { others: clampX(co - wo / 2, wo), you: clampX(cy - wy / 2, wy) }
+    }
     Text {
+        id: othersLabel
         visible: root.hasOthersMark
-        x: Math.max(60, Math.min(bar.width - width - 60, root.xOf(root.othersMark) - width / 2)); anchors { top: bar.bottom; topMargin: 5 }
+        x: root.labelX.others; anchors { top: bar.bottom; topMargin: 5 }
         text: "others"; color: Theme.tone; font.pixelSize: 10; font.bold: true
     }
     Text {
+        id: youLabel
         visible: root.hasMarks
-        x: Math.max(60, Math.min(bar.width - width - 60, root.xOf(root.youMark) - width / 2)); anchors { top: bar.bottom; topMargin: 5 }
+        x: root.labelX.you; anchors { top: bar.bottom; topMargin: 5 }
         text: "you"; color: Theme.gate; font.pixelSize: 10; font.bold: true
     }
     Text { anchors { right: parent.right; top: bar.bottom; topMargin: 5 } text: "close up →"; color: Theme.textFaint; font.pixelSize: 10 }

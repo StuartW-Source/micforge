@@ -4,7 +4,10 @@ VERSION = 0.1.0
 
 QT += core gui widgets qml quick quickcontrols2 network concurrent
 CONFIG += c++20 link_pkgconfig release
-PKGCONFIG += libpipewire-0.3 rnnoise lilv-0
+PKGCONFIG += libpipewire-0.3
+# Optional features are loaded at run time (src/optional/), not linked: a missing library must
+# never stop MicForge from starting. lilv's headers are still needed to build.
+QMAKE_CXXFLAGS += $$system(pkg-config --cflags lilv-0)
 DEFINES += MICFORGE_VERSION=\\\"$$VERSION\\\" RELEASE=1
 QMAKE_CXXFLAGS_RELEASE += -O2
 QMAKE_CXXFLAGS += -Wno-missing-field-initializers
@@ -16,12 +19,14 @@ VST3SDK = $$PWD/third_party/vst3sdk
 INCLUDEPATH += $$VST3SDK src
 
 SOURCES += \
-    src/main.cpp src/controller.cpp src/audioengine.cpp src/pluginmanager.cpp \
-    src/plugins/plugins.cpp src/plugins/lv2host.cpp src/plugins/vst3host.cpp
+    src/main.cpp src/startup.cpp src/diagnostics.cpp src/mictest.cpp src/calibprofiles.cpp src/controller.cpp src/audio/audiocore.cpp src/audio/pipewirebackend.cpp src/pluginmanager.cpp \
+    src/plugins/plugins.cpp src/plugins/lv2host.cpp src/plugins/vst3host.cpp \
+    src/optional/rnnoise_api.cpp src/optional/lilv_api.cpp src/platform/autostart_xdg.cpp
 
 HEADERS += \
-    src/params.h src/dsp.h src/effects.h src/separation.h src/audioengine.h src/controller.h \
-    src/pluginmanager.h src/plugins/plugins.h
+    src/params.h src/dsp.h src/effects.h src/separation.h src/audio/audiocore.h src/audio/audiobackend.h src/audio/pipewirebackend.h src/controller.h \
+    src/pluginmanager.h src/plugins/plugins.h src/startup.h src/diagnostics.h src/mictest.h src/levels.h src/privacy.h src/calibprofiles.h \
+    src/platform/dynlib.h src/platform/autostart.h src/optional/rnnoise_api.h src/optional/lilv_api.h
 
 # Only the SDK pieces a host needs (no GUI toolkit, no plugin-side code).
 SOURCES += \

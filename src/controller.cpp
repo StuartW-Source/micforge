@@ -14,6 +14,8 @@
 #include <cstring>
 
 #include <algorithm>
+#include <QDesktopServices>
+#include <QUrl>
 #include <cmath>
 
 using namespace mf;
@@ -42,8 +44,10 @@ const QList<BuiltinPreset> &builtinPresets() {
 
 // Settings that belong to this mic/room, not to a sound style. Built-in presets never touch them,
 // so loading a preset doesn't undo the voice-separation setup or remove added effects.
+QString calibDirPath() { return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/calib"; }
+
 bool isPersonalKey(const QString &k) {
-    static const QStringList keys = {"inputChannel", "inputGain", "gateThreshold", "gateHysteresis",
+    static const QStringList keys = {"mute", "inputChannel", "inputGain", "gateThreshold", "gateHysteresis",
                                      "gateFocus", "gateScLow", "gateScHigh", "gateCloseCheck", "gateTilt", "gateTiltDir",
                                      "micType", "needOthers", "needNoise", "needBroadcast", "bypass"};
     return keys.contains(k) || k.endsWith("Added");
@@ -51,17 +55,6 @@ bool isPersonalKey(const QString &k) {
 
 double roundHalf(double v) { return std::round(v * 2.0) / 2.0; }
 
-QString autostartPath() {
-    return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + "/autostart/micforge.desktop";
-}
-
-// Ask PipeWire-Pulse which mic is the system default (used on first run only).
-QString systemDefaultSource() {
-    QProcess p;
-    p.start("pactl", {"get-default-source"});
-    if (!p.waitForFinished(1500)) return {};
-    return QString::fromUtf8(p.readAllStandardOutput()).trimmed();
-}
 
 constexpr int kCalibVersion = 2; // bump when the analysis changes in a way that should re-tune saved setups
 
@@ -69,50 +62,90 @@ QString fmtHz(double v) { return v >= 1000 ? QString::number(v / 1000, 'f', 1) +
 
 } // namespace
 
-Controller::Controller(QObject *parent) : QObject(parent) {
+Controller::Controller(const StartupInfo &startup, QObject *parent)
+    : QObject(parent), m_profiles(calibDirPath(), m_settingsStore), m_startup(startup), m_autostart(createAutostart()) {
     QSettings s;
+    if (m_startup.safeMode)
+        qWarning("safe mode: using default sound settings and no plugins; nothing will be saved (%s)",
+                 qPrintable(m_startup.safeModeReason));
     for (int i = 0; i < PARAM_COUNT; ++i) {
-        const double v = s.value(QString("params/") + kParams[i].key, kParams[i].def).toDouble();
+        // Invalid or out-of-range stored values fall back to defaults instead of reaching the DSP.
+        bool ok = false;
+        double v = m_startup.safeMode ? kParams[i].def
+                                      : s.value(QString("params/") + kParams[i].key, kParams[i].def).toDouble(&ok);
+        if (!m_startup.safeMode && (!ok || !std::isfinite(v))) v = kParams[i].def;
+        v = std::clamp(v, double(kParams[i].min), double(kParams[i].max));
         m_params.insert(kParams[i].key, v);
-        m_engine.params.set(i, float(v));
+        m_core.params.set(i, float(v));
     }
-    m_engine.params.set(Bypass, 0); // never start bypassed
+    m_core.params.set(Bypass, 0); // never start bypassed or muted
+    m_core.params.set(Mute, 0);
+    m_params.insert("mute", 0);
     m_params.insert("bypass", 0);
     m_currentSource = s.value("source").toString();
     m_currentPreset = s.value("preset", builtinPresets().first().name).toString();
     if (m_currentPreset == QStringLiteral("SM57 · Voice chat")) m_currentPreset = builtinPresets().first().name;
     m_showWelcome = s.value("showWelcome", true).toBool();
+    m_themeMode = s.value("ui/theme", "system").toString();
+    if (m_themeMode != "dark" && m_themeMode != "light") m_themeMode = "system";
 
     connect(&m_params, &QQmlPropertyMap::valueChanged, this, &Controller::onParamEdited);
 
-    m_engine.onSourcesChanged = [this](std::vector<SourceInfo> list) {
+    m_backend = createAudioBackend(m_core, m_startup.backend);
+    m_backend->onDevicesChanged = [this](std::vector<InputDevice> list) {
         QMetaObject::invokeMethod(this, [this, list] { updateSources(list); }, Qt::QueuedConnection);
     };
-    m_engine.onStateChanged = [this] {
+    m_backend->onStateChanged = [this] {
         QMetaObject::invokeMethod(this, [this] { emit statusChanged(); }, Qt::QueuedConnection);
     };
+    m_backend->onConnectionLost = [this] {
+        QMetaObject::invokeMethod(this, [this] {
+            qWarning("audio engine: %s; reconnecting", m_backend->error().c_str());
+            scheduleEngineRetry(true);
+        }, Qt::QueuedConnection);
+    };
+    m_engineRetry.setSingleShot(true);
+    connect(&m_engineRetry, &QTimer::timeout, this, &Controller::startEngine);
 
-    if (m_currentSource.isEmpty()) {
-        const QString def = systemDefaultSource();
-        if (!def.isEmpty() && !def.startsWith("micforge") && !def.contains("easyeffects"))
-            m_currentSource = def;
+    if (!rnnoise::available()) {
+        m_unavailable << tr("AI Noise Removal is unavailable because %1. Install the “rnnoise” package to enable it.")
+                             .arg(QString::fromStdString(rnnoise::error()));
+        qWarning("optional feature: AI noise removal unavailable: %s", rnnoise::error().c_str());
     }
-    m_engine.setCaptureTarget(m_currentSource.toStdString());
-    m_engineOk = m_engine.start();
+    QString lv2Why;
+    if (!lv2Available(&lv2Why)) {
+        m_unavailable << tr("LV2 plugins are unavailable because %1. Install the “lilv” package to enable them.").arg(lv2Why);
+        qWarning("optional feature: LV2 hosting unavailable: %s", qPrintable(lv2Why));
+    }
 
-    // Third-party plugins: restore the saved chain now, discover what's installed in the background.
-    m_plugins = new PluginManager(&m_engine.rack, AudioEngine::kRate, this);
-    m_plugins->restore();
+    // First run (no microphone chosen yet): adopt the system default as soon as the backend reports it.
+    m_backend->onDefaultInputChanged = [this] {
+        QMetaObject::invokeMethod(this, [this] { adoptDefaultInputIfUnset(); }, Qt::QueuedConnection);
+    };
+    m_backend->setInputDevice(m_currentSource.toStdString());
+    startEngine();
+    QTimer::singleShot(3000, this, [this] {
+        m_defaultWaitOver = true;
+        adoptDefaultInputIfUnset();
+    });
+
+    // Third-party plugins: restore the saved chain now (not in safe mode), discover what's installed in the background.
+    m_plugins = new PluginManager(&m_core.rack, AudioCore::kRate, this);
+    m_diagnostics = new Diagnostics(this, m_core, *m_backend, m_startup.logPath, this);
+    m_micTest = new MicTestSession(m_core, this);
+    m_micTest->onNeedMonitorStream = [this](bool on) { m_testPlayback = on; updateMonitorStream(); };
+    m_plugins->setReadOnly(m_startup.safeMode);
+    if (!m_startup.safeMode) m_plugins->restore();
     QTimer::singleShot(1200, m_plugins, [this] { m_plugins->rescan(); });
 
-    if (autostart() && !qEnvironmentVariableIsSet("MICFORGE_TEST")) writeAutostartEntry();
+    if (!m_startup.safeMode && !qEnvironmentVariableIsSet("MICFORGE_TEST")) m_autostart->refresh(autostartHidden());
 
     m_meterTimer.setInterval(33);
     connect(&m_meterTimer, &QTimer::timeout, this, &Controller::pollMeters);
     m_meterTimer.start();
 
     // The voice-separation analysis improved since these recordings were tuned: re-tune once.
-    if (hasRecordings() && QSettings().value("calib/version", 1).toInt() < kCalibVersion)
+    if (!m_startup.safeMode && hasRecordings() && QSettings().value("calib/version", 1).toInt() < kCalibVersion)
         QTimer::singleShot(1500, this, &Controller::retuneFromRecordings);
 
     m_saveTimer.setSingleShot(true);
@@ -144,6 +177,15 @@ Controller::Controller(QObject *parent) : QObject(parent) {
 Controller::~Controller() {
     m_analysis.waitForFinished();
     saveNow();
+    // Explicit shutdown order: stop the audio thread, then destroy plugins (they live in m_core.rack,
+    // which is destroyed before Qt would delete child objects), then everything else.
+    delete m_micTest;
+    m_micTest = nullptr;
+    delete m_diagnostics;
+    m_diagnostics = nullptr;
+    m_backend.reset();
+    delete m_plugins;
+    m_plugins = nullptr;
 }
 
 // ---------------------------------------------------------------- params
@@ -160,8 +202,8 @@ double Controller::defaultValue(const QString &key) const {
 }
 
 void Controller::applyToEngine(int id, double value) {
-    m_engine.params.set(id, float(value));
-    if (id != Bypass) m_saveTimer.start();
+    m_core.params.set(id, float(value));
+    if (id != Bypass && id != Mute) m_saveTimer.start();
     if (id == InputGain || id == GateFocus || id == GateScLow || id == GateScHigh) emit zonesChanged();
 }
 
@@ -170,6 +212,7 @@ void Controller::onParamEdited(const QString &key, const QVariant &value) {
     if (id < 0) return;
     const double v = std::clamp(value.toDouble(), double(kParams[id].min), double(kParams[id].max));
     applyToEngine(id, v);
+    if (id == Bypass || id == Mute) emit statusChanged();
     if (!isPersonalKey(key) && !m_currentPreset.isEmpty()) {
         m_currentPreset.clear();
         emit presetsChanged();
@@ -194,42 +237,60 @@ void Controller::addEffect(const QString &name) {
 void Controller::removeEffect(const QString &name) { setParam(name + "Added", 0); }
 
 void Controller::saveNow() {
+    if (m_startup.safeMode) return; // safe mode never overwrites the user's configuration
     QSettings s;
     for (int i = 0; i < PARAM_COUNT; ++i)
-        if (i != Bypass) s.setValue(QString("params/") + kParams[i].key, m_params.value(kParams[i].key));
+        if (i != Bypass && i != Mute) s.setValue(QString("params/") + kParams[i].key, m_params.value(kParams[i].key));
     s.setValue("source", m_currentSource);
     s.setValue("preset", m_currentPreset);
     s.setValue("showWelcome", m_showWelcome);
+    s.setValue("ui/theme", m_themeMode);
 }
 
 // ---------------------------------------------------------------- devices
 
-void Controller::updateSources(const std::vector<SourceInfo> &list) {
+void Controller::updateSources(const std::vector<InputDevice> &list) {
     QVariantList out;
     for (const auto &s : list) {
         QVariantMap m;
-        m["name"] = QString::fromStdString(s.name);
-        m["description"] = QString::fromStdString(s.description);
+        m["name"] = QString::fromStdString(s.id);
+        m["description"] = QString::fromStdString(s.name);
         out << m;
     }
     m_sources = out;
     emit sourcesChanged();
+    adoptDefaultInputIfUnset();
+}
 
-    // First run with no usable default: pick the first hardware mic.
-    if (m_currentSource.isEmpty()) {
-        for (const auto &s : list) {
-            if (s.name.rfind("alsa_input.", 0) == 0) {
-                setCurrentSource(QString::fromStdString(s.name));
-                break;
-            }
+// Only when the user hasn't chosen a microphone yet: use the system default (never MicForge's own or
+// another processing app's virtual mic), else the first hardware microphone.
+void Controller::adoptDefaultInputIfUnset() {
+    if (!m_currentSource.isEmpty() || m_sources.isEmpty()) return;
+    auto usable = [](const QString &id) { return !id.startsWith("micforge") && !id.contains("easyeffects"); };
+    const QString def = QString::fromStdString(m_backend->defaultInputDevice());
+    for (const auto &v : m_sources)
+        if (v.toMap()["name"].toString() == def && usable(def)) {
+            qInfo("devices: no microphone chosen yet; using the system default %s", qPrintable(def));
+            return setCurrentSource(def);
+        }
+    // Devices and the default are announced one by one: keep waiting for the default to appear.
+    // Only if it hasn't after a few seconds (adoptFallbackInput) take the first hardware microphone.
+    if (!m_defaultWaitOver) return;
+    for (const auto &v : m_sources) {
+        const QString id = v.toMap()["name"].toString();
+        if (id.startsWith("alsa_input.") && usable(id)) {
+            qInfo("devices: system default (%s) isn't usable; using %s", qPrintable(def), qPrintable(id));
+            return setCurrentSource(id);
         }
     }
 }
 
 void Controller::setCurrentSource(const QString &name) {
     if (name == m_currentSource) return;
+    const QString previous = m_currentSource;
     m_currentSource = name;
-    m_engine.setCaptureTarget(name.toStdString());
+    switchProfile(previous, name);
+    m_backend->setInputDevice(name.toStdString());
     m_saveTimer.start();
     emit currentSourceChanged();
 }
@@ -237,9 +298,79 @@ void Controller::setCurrentSource(const QString &name) {
 void Controller::setMonitor(bool on) {
     if (on == m_monitor) return;
     m_monitor = on;
-    m_engine.setMonitor(on);
+    m_core.setLiveMonitor(on);
+    updateMonitorStream();
     emit monitorChanged();
 }
+
+// ---------------------------------------------------------------- per-microphone Setup
+
+QString Controller::sourceDescription(const QString &name) const {
+    for (const QVariant &v : m_sources)
+        if (v.toMap().value("name").toString() == name) return v.toMap().value("description").toString();
+    return name;
+}
+
+QVariantMap Controller::profileParamValues() const {
+    QVariantMap m;
+    for (const QString &k : CalibrationProfiles::profileParams()) m[k] = m_params.value(k);
+    return m;
+}
+
+void Controller::saveProfileFor(const QString &device) {
+    if (m_startup.safeMode || device.isEmpty()) return;
+    m_settingsStore.setValue("calib/device", device);
+    if (m_profiles.save(device, sourceDescription(device), profileParamValues()))
+        qInfo("setup: saved the Setup for this microphone (%s)", qPrintable(device));
+    emit profileNoticeChanged();
+}
+
+// Called when the user picks another microphone. The outgoing mic's Setup is saved first (so nothing
+// is lost), then the incoming mic's own Setup is restored if it has one.
+void Controller::switchProfile(const QString &from, const QString &to) {
+    if (m_startup.safeMode || from.isEmpty() || to.isEmpty() || !m_calibPhase.isEmpty()) return;
+    m_settingsStore.sync();
+    const bool valid = m_settingsStore.value("calib/valid").toBool();
+    const QString owner = m_settingsStore.value("calib/device").toString();
+    if (valid && (owner.isEmpty() || owner == from)) saveProfileFor(from); // older setups have no owner yet: it's the mic in use
+    if (m_profiles.has(to)) {
+        const QString preset = m_currentPreset;
+        const QVariantMap params = m_profiles.restore(to);
+        for (auto it = params.begin(); it != params.end(); ++it) setParam(it.key(), it.value().toDouble());
+        if (m_currentPreset != preset) { m_currentPreset = preset; emit presetsChanged(); } // a mic switch isn't an edit
+        m_profileNotice = tr("Loaded the Setup saved for “%1”.").arg(sourceDescription(to));
+        qInfo("setup: restored the Setup for %s", qPrintable(to));
+        emit zonesChanged();
+        emit recordingsChanged();
+    } else if (valid) {
+        m_profileNotice = tr("“%1” hasn't been set up yet. The current Setup (made with another microphone) stays in "
+                             "use until you run Setup for this one.").arg(sourceDescription(to));
+    } else {
+        m_profileNotice.clear();
+    }
+    emit profileNoticeChanged();
+}
+
+QVariantList Controller::micProfiles() const {
+    QVariantList out = m_profiles.list();
+    const QString owner = QSettings().value("calib/device").toString();
+    for (QVariant &v : out) {
+        QVariantMap m = v.toMap();
+        m["active"] = m.value("device").toString() == owner;
+        m["connected"] = std::any_of(m_sources.begin(), m_sources.end(), [&](const QVariant &s) {
+            return s.toMap().value("name") == m.value("device");
+        });
+        v = m;
+    }
+    return out;
+}
+
+void Controller::dismissProfileNotice() {
+    m_profileNotice.clear();
+    emit profileNoticeChanged();
+}
+
+void Controller::updateMonitorStream() { m_backend->setMonitor(m_monitor || m_testPlayback); }
 
 void Controller::setShowWelcome(bool on) {
     if (on == m_showWelcome) return;
@@ -248,10 +379,18 @@ void Controller::setShowWelcome(bool on) {
     emit showWelcomeChanged();
 }
 
+void Controller::setThemeMode(const QString &mode) {
+    const QString m = (mode == "dark" || mode == "light") ? mode : QStringLiteral("system");
+    if (m == m_themeMode) return;
+    m_themeMode = m;
+    m_saveTimer.start();
+    emit themeModeChanged();
+}
+
 // ---------------------------------------------------------------- meters
 
 void Controller::pollMeters() {
-    Meters &m = m_engine.meters;
+    Meters &m = m_core.meters;
     m_inPeak = m.inPeak.exchange(-120);
     m_noiseVad = m.noiseVad.exchange(0);
     m_gateLevel = m.gateLevel.exchange(-120);
@@ -304,6 +443,7 @@ void Controller::loadPreset(const QString &name) {
         if (!f.open(QIODevice::ReadOnly)) return;
         values = QJsonDocument::fromJson(f.readAll()).object().toVariantMap();
         values.remove("bypass");
+        values.remove("mute");
     }
     for (auto it = values.begin(); it != values.end(); ++it) {
         const int id = idForKey(it.key());
@@ -321,7 +461,7 @@ void Controller::savePreset(const QString &rawName) {
     QDir().mkpath(presetDir());
     QJsonObject o;
     for (int i = 0; i < PARAM_COUNT; ++i)
-        if (i != Bypass) o[kParams[i].key] = m_params.value(kParams[i].key).toDouble();
+        if (i != Bypass && i != Mute) o[kParams[i].key] = m_params.value(kParams[i].key).toDouble();
     QFile f(presetDir() + "/" + name + ".json");
     if (!f.open(QIODevice::WriteOnly)) return;
     f.write(QJsonDocument(o).toJson());
@@ -339,35 +479,21 @@ void Controller::deletePreset(const QString &name) {
 
 // ---------------------------------------------------------------- autostart
 
-bool Controller::autostart() const { return QFile::exists(autostartPath()); }
+bool Controller::autostart() const { return m_autostart->enabled(); }
 
 bool Controller::autostartHidden() const { return QSettings().value("autostartHidden", true).toBool(); }
 
-// (Re)write the login entry so it always points at the copy of MicForge that's running now
-// (e.g. /usr/bin/micforge from the AUR, or ~/.local/bin/micforge from install.sh).
-void Controller::writeAutostartEntry() {
-    QDir().mkpath(QFileInfo(autostartPath()).path());
-    QFile f(autostartPath());
-    if (!f.open(QIODevice::WriteOnly)) return;
-    f.write(QString("[Desktop Entry]\nType=Application\nName=MicForge\n"
-                    "Comment=Microphone processing for voice chat\n"
-                    "Exec=\"%1\"%2\nIcon=micforge\n"
-                    "X-GNOME-Autostart-enabled=true\nX-KDE-autostart-phase=2\n")
-                .arg(QCoreApplication::applicationFilePath(), autostartHidden() ? " --minimized" : "")
-                .toUtf8());
-}
-
 void Controller::setAutostart(bool on) {
     if (on == autostart()) return;
-    if (on) writeAutostartEntry();
-    else QFile::remove(autostartPath());
+    m_autostart->setEnabled(on, autostartHidden());
+    qInfo("autostart: %s (%s)", on ? "enabled" : "disabled", qPrintable(m_autostart->describe()));
     emit autostartChanged();
 }
 
 void Controller::setAutostartHidden(bool hidden) {
     if (hidden == autostartHidden()) return;
     QSettings().setValue("autostartHidden", hidden);
-    if (autostart()) writeAutostartEntry();
+    if (autostart()) m_autostart->setEnabled(true, hidden);
     emit autostartChanged();
 }
 
@@ -450,6 +576,7 @@ void Controller::startCalibration() {
     m_learning = false;
     m_redo.clear();
     m_takes.clear();
+    m_takeClips.clear();
     m_calibResult.clear();
     enterPhase("prepRoom");
 }
@@ -462,6 +589,7 @@ void Controller::startLearnOthers() {
     m_learning = true;
     m_redo.clear();
     m_takes.clear();
+    m_takeClips.clear();
     m_calibResult.clear();
     enterPhase("learnPrep");
 }
@@ -476,6 +604,7 @@ void Controller::redoStep(const QString &step) {
     m_learning = false;
     m_redo = step;
     m_takes.clear();
+    m_takeClips.clear();
     m_calibResult.clear();
     enterPhase(step == "room" ? "prepRoom" : step == "others" ? "prepOthers" : "prepYou");
 }
@@ -487,6 +616,7 @@ void Controller::retuneFromRecordings() {
     m_learning = false;
     m_redo.clear();
     m_takes.clear();
+    m_takeClips.clear();
     m_retune = true;
     m_calibPhase = "analysing";
     startAnalysis();
@@ -505,20 +635,24 @@ void Controller::restartStep() {
 }
 
 void Controller::enterPhase(const QString &phase) {
-    Recorder &rec = m_engine.recorder;
+    Recorder &rec = m_core.recorder;
     static const QStringList takes = {"room", "others", "you", "learn"};
     // Keep the take that just finished.
     if (takes.contains(m_calibPhase)) {
         const size_t to = std::min(rec.pos.load(), rec.buf.size());
         m_takes[m_calibPhase] = to > m_takeFrom ? std::vector<float>(rec.buf.begin() + m_takeFrom, rec.buf.begin() + to)
                                                 : std::vector<float>{};
+        m_takeClips[m_calibPhase] = m_core.stats.inputClips.load() - m_clipsFrom;
     }
     // Each step records into a fresh buffer: restart the recorder at every countdown.
     if (phase.startsWith("prep") || phase == "learnPrep") {
         rec.active = false;
         rec.pos = 0;
     }
-    if (takes.contains(phase)) m_takeFrom = rec.pos.load();
+    if (takes.contains(phase)) {
+        m_takeFrom = rec.pos.load();
+        m_clipsFrom = m_core.stats.inputClips.load();
+    }
 
     rec.active = phase.startsWith("prep") || phase == "learnPrep" || takes.contains(phase);
     m_calibPhase = phase;
@@ -558,7 +692,7 @@ void Controller::continueCalibration() {
 }
 
 void Controller::cancelCalibration() {
-    m_engine.recorder.active = false;
+    m_core.recorder.active = false;
     m_calibPhase.clear();
     emit calibChanged();
 }
@@ -595,6 +729,8 @@ void Controller::startAnalysis() {
         you = take("you");
         others = take("others");
     }
+    m_youLevels = analyseLevels(you.data(), you.size(), AudioCore::kRate);
+    m_roomLevels = analyseLevels(room.data(), room.size(), AudioCore::kRate);
     saveSamples("room", room);
     saveSamples("you", you);
     saveSamples("others", others);
@@ -627,8 +763,27 @@ void Controller::applyAnalysis(const SeparationResult &r) {
         steps << row("room", tr("Quiet room"), checkRoom(r));
         if (m_params.value("needOthers").toDouble() > 0.5 || r.hadOthers)
             steps << row("others", tr("Other voices"), checkOthers(r));
-        steps << row("you", tr("Your voice"), checkYou(r));
+        QVariantMap youRow = row("you", tr("Your voice"), checkYou(r));
+
+        // Level checks: clipping happens before MicForge (in the mic or interface) and can't be undone
+        // in software, so it outranks everything else; then how far the voice stands above the room.
+        QSettings cs;
+        if (m_takeClips.count("you")) cs.setValue("calib/youClips", qulonglong(m_takeClips["you"]));
+        const qulonglong clips = cs.value("calib/youClips", 0).toULongLong();
+        const double range = m_youLevels.valid && m_roomLevels.valid ? m_youLevels.speechDb - m_roomLevels.speechDb : 0.0;
+        if (clips > 0) {
+            youRow["status"] = "bad";
+            youRow["note"] = tr("Your mic clipped (distorted) %n time(s) while you talked. Turn down the gain on your "
+                                "interface or mic, then redo this step.", nullptr, int(std::min<qulonglong>(clips, 1u << 30)));
+        } else if (youRow["status"] == "ok" && m_youLevels.valid && m_roomLevels.valid && range < 15) {
+            youRow["status"] = "warn";
+            youRow["note"] = tr("Your voice is only %1 dB above the room's background. Move closer to the mic or "
+                                "make the room quieter, then redo this step.").arg(qRound(range));
+        }
+        steps << youRow;
         out["steps"] = steps;
+        out["levels"] = QVariantMap{{"valid", m_youLevels.valid && m_roomLevels.valid}, {"range", range},
+                                    {"youPeak", m_youLevels.peakDb}, {"clips", clips}};
     }
     const bool needOthers = m_params.value("needOthers").toDouble() > 0.5 || m_learning;
     const bool keepLevels = m_learning || m_retune; // don't touch gain/compressor
@@ -747,6 +902,7 @@ void Controller::applyAnalysis(const SeparationResult &r) {
     emit calibChanged();
     emit recordingsChanged();
     QSettings().setValue("calib/version", kCalibVersion);
+    saveProfileFor(m_currentSource); // this Setup now belongs to the microphone in use
     if (m_retune) {
         // Silent re-tune: don't leave a result page behind for the Setup window.
         m_retune = false;
@@ -775,3 +931,66 @@ QVariantMap Controller::zones() const {
     z["othersTilt"] = s.value("calib/othersTilt", -200.0).toDouble();
     return z;
 }
+
+// ---------------------------------------------------------------- audio engine lifecycle
+
+void Controller::startEngine() {
+    if (m_backend->start()) {
+        if (m_engineAttempts > 0) qInfo("audio engine: connected to %s after %d retries", m_backend->name().c_str(), m_engineAttempts);
+        else qInfo("audio engine: connected to %s", m_backend->name().c_str());
+        m_engineAttempts = 0; // start() already (re)created the capture stream for the chosen microphone
+    } else {
+        if (m_engineAttempts == 0 || m_engineAttempts % 10 == 0)
+            qWarning("audio engine: %s (attempt %d); will retry", m_backend->error().c_str(), m_engineAttempts + 1);
+        scheduleEngineRetry(false);
+    }
+    emit statusChanged();
+}
+
+// Reconnect with a short back-off (0.5, 1, 2, 4 s, then every 5 s) instead of a fixed start-up delay:
+// MicForge starts immediately and connects as soon as PipeWire is reachable.
+void Controller::scheduleEngineRetry(bool immediate) {
+    if (m_engineRetry.isActive()) return;
+    const int steps[] = {500, 1000, 2000, 4000, 5000};
+    const int ms = immediate ? 300 : steps[std::min(m_engineAttempts, 4)];
+    ++m_engineAttempts;
+    m_engineRetry.start(ms);
+    emit statusChanged();
+}
+
+void Controller::restartEngine() {
+    qInfo("audio engine: restart requested");
+    m_engineRetry.stop();
+    m_engineAttempts = 0;
+    startEngine();
+}
+
+QString Controller::engineState() const {
+    if (m_backend->connected()) return QStringLiteral("running");
+    return m_engineRetry.isActive() ? QStringLiteral("reconnecting") : QStringLiteral("stopped");
+}
+
+QString Controller::appState() const {
+    if (!m_backend->connected()) return m_engineRetry.isActive() ? "connecting" : "disconnected";
+    if (!m_backend->inputRunning()) return "no-input";
+    if (muted()) return "muted";
+    if (m_params.value("bypass").toDouble() > 0.5) return "bypassed";
+    return "processing";
+}
+
+QString Controller::appStateText() const {
+    const QString s = appState();
+    if (s == "disconnected") return tr("Audio engine stopped");
+    if (s == "connecting") return tr("Connecting to %1…").arg(backendName());
+    if (s == "no-input") return m_currentSource.isEmpty() ? tr("No microphone selected") : tr("Microphone not connected");
+    if (s == "muted") return tr("Muted: apps hear silence");
+    if (s == "bypassed") return tr("Bypassed: apps hear your raw mic");
+    return virtualMicInUse() ? tr("Live: an app is using MicForge") : tr("Ready: pick “MicForge” as your mic in any app");
+}
+
+QString Controller::engineError() const { return QString::fromStdString(m_backend->error()); }
+
+void Controller::openLogFolder() { QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(m_startup.logPath).path())); }
+
+void Controller::requestRestart(bool safeMode) { emit restartRequested(safeMode); }
+

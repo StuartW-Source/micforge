@@ -57,18 +57,28 @@ struct AutoLevel {
     }
 };
 
+// Glide `v` towards `t` (per-sample, ~10 ms at 48 kHz); snaps when close.
+inline void glide(float &v, float t, float k = 0.0021f) {
+    if (v != t) { v += k * (t - v); if (std::fabs(t - v) < 1e-5f) v = t; }
+}
+
 // ------------------------------------------------------------------ Warmth
 // Gentle analogue-style saturation: rounds off peaks and adds a little even-harmonic richness.
 struct Warmth {
-    float drive = 1, bias = 0.05f, offset = 0, comp = 1, dc = 0, dcC = 0;
+    float drive = 1, driveT = 1, bias = 0.05f, offset = 0, comp = 1, dc = 0, dcC = 0;
+    bool ready = false;
     void configure(float fs, float amount) {
-        drive = 1.0f + amount / 100.0f * 3.0f;
+        driveT = 1.0f + amount / 100.0f * 3.0f;
+        if (!ready) { drive = driveT; ready = true; recalc(); }
+        dcC = onePole(50.0f, fs);
+    }
+    void recalc() {
         offset = std::tanh(drive * bias);
         comp = 1.0f / (1.0f - offset * offset); // unity gain for quiet signals
-        dcC = onePole(50.0f, fs);
     }
     void reset() { dc = 0; }
     inline float process(float x) {
+        if (drive != driveT) { glide(drive, driveT); recalc(); }
         float y = (std::tanh(drive * (x + bias)) - offset) / drive * comp;
         dc = dcC * dc + (1 - dcC) * y; // remove the small DC the bias creates
         return y - dc;
@@ -143,16 +153,20 @@ struct VoiceChanger {
 // Two slowly drifting copies of your voice, 12-25 ms behind: sounds thicker, like double-tracking.
 struct Doubler {
     DelayLine buf{4096};
-    float fs = 48000, width = 0.5f, mix = 0.4f, ph1 = 0, ph2 = 1.7f, inc1 = 0, inc2 = 0;
+    float fs = 48000, width = 0.5f, widthT = 0.5f, mix = 0.4f, mixT = 0.4f, ph1 = 0, ph2 = 1.7f, inc1 = 0, inc2 = 0;
+    bool ready = false;
     void configure(float sampleRate, float widthPct, float mixPct) {
         fs = sampleRate;
-        width = widthPct / 100.0f;
-        mix = mixPct / 100.0f;
+        widthT = widthPct / 100.0f;
+        mixT = mixPct / 100.0f;
+        if (!ready) { width = widthT; mix = mixT; ready = true; }
         inc1 = kTwoPi * 0.31f / fs;
         inc2 = kTwoPi * 0.47f / fs;
     }
     void reset() { buf.clear(); }
     inline float process(float x) {
+        glide(mix, mixT);
+        glide(width, widthT);
         buf.push(x);
         ph1 += inc1; if (ph1 > kTwoPi) ph1 -= kTwoPi;
         ph2 += inc2; if (ph2 > kTwoPi) ph2 -= kTwoPi;
@@ -166,15 +180,20 @@ struct Doubler {
 // ------------------------------------------------------------------ Echo
 struct Echo {
     DelayLine buf{131072}; // ~2.7 s at 48 kHz
-    float delay = 15000, fb = 0.35f, mix = 0.25f, lp = 0, lpC = 0;
+    float delay = 15000, delayT = 15000, fb = 0.35f, fbT = 0.35f, mix = 0.25f, mixT = 0.25f, lp = 0, lpC = 0;
+    bool ready = false;
     void configure(float fs, float ms, float fbPct, float mixPct, float toneHz) {
-        delay = std::clamp(ms * 0.001f * fs, 1.0f, float(buf.length() - 2));
-        fb = fbPct / 100.0f;
-        mix = mixPct / 100.0f;
+        delayT = std::clamp(ms * 0.001f * fs, 1.0f, float(buf.length() - 2));
+        fbT = fbPct / 100.0f;
+        mixT = mixPct / 100.0f;
+        if (!ready) { delay = delayT; fb = fbT; mix = mixT; ready = true; }
         lpC = std::exp(-kTwoPi * toneHz / fs);
     }
     void reset() { buf.clear(); lp = 0; }
     inline float process(float x) {
+        glide(mix, mixT);
+        glide(fb, fbT);
+        glide(delay, delayT, 0.0005f); // a moving delay time glides (like tape) instead of jumping
         float rep = buf.tap(delay);
         lp = lpC * lp + (1 - lpC) * rep; // repeats get darker, like a tape/analogue echo
         buf.push(x + lp * fb);
@@ -207,7 +226,8 @@ struct Reverb {
     };
     std::array<Comb, 6> combs;
     std::array<Allpass, 3> aps;
-    float fb = 0.84f, damp = 0.2f, mix = 0.2f;
+    float fb = 0.84f, damp = 0.2f, mix = 0.2f, fbT = 0.84f, dampT = 0.2f, mixT = 0.2f;
+    bool ready = false;
 
     explicit Reverb(float fs = 48000) {
         const int cl[6] = {1116, 1188, 1277, 1356, 1422, 1491};
@@ -217,15 +237,17 @@ struct Reverb {
         for (int k = 0; k < 3; ++k) aps[size_t(k)].b.assign(size_t(al[k] * sc), 0.0f);
     }
     void configure(float sizePct, float dampPct, float mixPct) {
-        fb = 0.70f + sizePct / 100.0f * 0.28f;
-        damp = dampPct / 100.0f * 0.5f;
-        mix = mixPct / 100.0f;
+        fbT = 0.70f + sizePct / 100.0f * 0.28f;
+        dampT = dampPct / 100.0f * 0.5f;
+        mixT = mixPct / 100.0f;
+        if (!ready) { fb = fbT; damp = dampT; mix = mixT; ready = true; }
     }
     void reset() {
         for (auto &c : combs) { std::fill(c.b.begin(), c.b.end(), 0.0f); c.store = 0; }
         for (auto &a : aps) std::fill(a.b.begin(), a.b.end(), 0.0f);
     }
     inline float process(float x) {
+        glide(mix, mixT); glide(fb, fbT); glide(damp, dampT);
         const float in = x * 0.015f;
         float s = 0;
         for (auto &c : combs) s += c.process(in, fb, damp);

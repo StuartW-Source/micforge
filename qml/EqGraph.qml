@@ -8,7 +8,7 @@ Item {
     property color accent: Theme.tone
     property int selected: 3
     readonly property var p: controller.params
-    readonly property var bandColors: ["#ffb347", "#ff7aa8", "#b58cff", "#5aa9ff", "#56d4e8"]
+    readonly property var bandColors: [Theme.comp, Theme.tone, Theme.reverb, Theme.input, Theme.output]
 
     implicitHeight: 260
 
@@ -39,9 +39,9 @@ Item {
                 width: root.selected === handle.band ? 24 : 20
                 height: width; radius: width / 2
                 color: root.bandColors[index]
-                border.color: "#10131a"
+                border.color: Theme.onAccent
                 border.width: 2
-                Text { anchors.centerIn: parent; text: handle.band; color: "#10131a"; font.pixelSize: 11; font.bold: true }
+                Text { anchors.centerIn: parent; text: handle.band; color: Theme.onAccent; font.pixelSize: 11; font.bold: true }
             }
             MouseArea {
                 anchors.fill: parent

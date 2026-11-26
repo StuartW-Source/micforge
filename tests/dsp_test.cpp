@@ -1,6 +1,7 @@
 // Offline sanity test for the voice chain: feeds synthetic signals and checks behaviour.
-// Build: g++ -std=c++20 -O2 -I../src dsp_test.cpp -lrnnoise -o dsp_test && ./dsp_test
+// Build: g++ -std=c++20 -O2 -Isrc tests/dsp_test.cpp src/optional/rnnoise_api.cpp -ldl -o dsp_test && ./dsp_test
 #include "dsp.h"
+#include "levels.h"
 #include "separation.h"
 
 #include <cstdio>
@@ -46,6 +47,50 @@ static std::vector<float> run(Params &p, const std::vector<float> &in) {
         chain.process(in.data() + 2 * i, 2, out.data() + i, n, p, m);
     }
     return out;
+}
+
+// Run `in`, applying `change` to the params at block boundary `atFrame` (multiple of 256).
+template <typename F>
+static std::vector<float> runChange(Params &p, const std::vector<float> &in, int atFrame, F change) {
+    VoiceChain chain(48000);
+    Meters m;
+    const int frames = int(in.size() / 2);
+    std::vector<float> out(frames);
+    for (int i = 0; i < frames; i += 256) {
+        if (i == atFrame) change(p);
+        chain.process(in.data() + 2 * i, 2, out.data() + i, std::min(256, frames - i), p, m);
+    }
+    return out;
+}
+// How much sharper the sharpest corner (second difference) is around `at` than in the steady signal
+// before or after the change. ~1 = a smooth transition; a click from an instant jump scores far higher.
+static double clickRatio(const std::vector<float> &y, int at) {
+    auto maxD2 = [&](int from, int to) {
+        double m = 0;
+        for (int i = std::max(2, from); i < to; ++i) m = std::max(m, double(std::fabs(y[i] - 2 * y[i - 1] + y[i - 2])));
+        return m;
+    };
+    const double steady = std::max(maxD2(at - 4000, at - 2000), maxD2(at + 6000, at + 8000));
+    return maxD2(at - 64, at + 1440) / std::max(1e-9, steady);
+}
+
+// True peak (between samples) by 16x band-limited interpolation, in dBFS.
+static double truePeakDb(const std::vector<float> &y, int from) {
+    double pk = 0;
+    const int taps = 48;
+    for (int n = from + taps; n < int(y.size()) - taps; ++n)
+        for (int ph = 0; ph < 16; ++ph) {
+            const double t = ph / 16.0;
+            double acc = 0;
+            for (int k = -taps; k <= taps; ++k) {
+                const double d = k - t;
+                const double sinc = std::fabs(d) < 1e-12 ? 1.0 : std::sin(M_PI * d) / (M_PI * d);
+                const double w = 0.5 + 0.5 * std::cos(M_PI * d / (taps + 1));
+                acc += y[n + k] * sinc * w;
+            }
+            pk = std::max(pk, std::fabs(acc));
+        }
+    return linToDb(float(pk));
 }
 
 static void allOff(Params &p) {
@@ -141,7 +186,9 @@ int main() {
         auto out = run(p, tone(1000, -20, N));
         check(std::fabs(rmsDb(out, N / 2, N) + 23.01 - 6) < 0.2, "EQ: +6 dB bell at 1 kHz", rmsDb(out, N / 2, N) + 23.01);
     }
-    { // RNNoise runs, adds a 10 ms frame of delay, output finite; white noise is reduced.
+    if (!mf::rnnoise::available()) {
+        std::printf("[SKIP] AI noise removal tests: %s\n", mf::rnnoise::error().c_str());
+    } else { // RNNoise runs, adds a 10 ms frame of delay, output finite; white noise is reduced.
         Params p; allOff(p); p.set(NoiseAdded, 1); p.set(NoiseOn, 1);
         std::vector<float> in(N * 2);
         uint32_t s = 1;
@@ -344,6 +391,94 @@ int main() {
         bool finite = true;
         for (float x : out) finite &= std::isfinite(x);
         check(finite && peakDb(out) <= -0.99, "all effects at extremes: finite, never above ceiling", peakDb(out));
+    }
+    { // Mute: silence within ~25 ms, no click (gain changes smoothly), and it applies in bypass too.
+        Params p; allOff(p);
+        VoiceChain c(48000); Meters m;
+        auto in = tone(1000, -6, N);
+        std::vector<float> out(N);
+        c.process(in.data(), 2, out.data(), 4800, p, m);                   // 100 ms unmuted
+        p.set(Mute, 1);
+        c.process(in.data() + 9600, 2, out.data() + 4800, 4800, p, m);    // muted
+        float maxStep = 0, tail = 0;
+        for (int i = 4801; i < 4800 + 240; ++i) maxStep = std::max(maxStep, std::fabs(std::fabs(out[i]) - std::fabs(out[i - 1])));
+        for (int i = 4800 + 480; i < 9600; ++i) tail = std::max(tail, std::fabs(out[i]));
+        check(tail < 1e-5f, "mute: exact silence after 10 ms", linToDb(tail));
+        check(maxStep < 0.2f, "mute: fades instead of clicking", maxStep);
+        p.set(Bypass, 1);
+        c.process(in.data() + 19200, 2, out.data(), 4800, p, m);
+        float pk = 0; for (int i = 0; i < 4800; ++i) pk = std::max(pk, std::fabs(out[i]));
+        check(pk < 1e-5f, "mute: also silences bypass (raw mic never sent)", linToDb(pk));
+    }
+    // ---- Phase 4: no clicks when settings change (parameter smoothing everywhere).
+    {
+        const int at = 24064; // block boundary, mid-cycle of the 1 kHz tone
+        auto in = tone(1000, -20, N);
+        struct Case { const char *name; void (*setup)(Params &); void (*change)(Params &); };
+        const Case cases[] = {
+            {"smoothing: input gain +12 dB step", [](Params &) {}, [](Params &q) { q.set(InputGain, 12); }},
+            {"smoothing: output gain +12 dB step", [](Params &) {}, [](Params &q) { q.set(OutputGain, 12); }},
+            {"smoothing: EQ band to +12 dB", [](Params &q) { q.set(EqAdded, 1); q.set(EqOn, 1); q.set(Eq3Freq, 1000); },
+             [](Params &q) { q.set(Eq3Gain, 12); }},
+            {"smoothing: Tone presence to +10 dB", [](Params &q) { q.set(ToneOn, 1); }, [](Params &q) { q.set(TonePresence, 10); }},
+            {"smoothing: compressor boost +12 dB", [](Params &q) { q.set(CompOn, 1); q.set(CompThreshold, 0); },
+             [](Params &q) { q.set(CompMakeup, 12); }},
+            {"smoothing: switching the EQ on", [](Params &q) { q.set(EqAdded, 1); q.set(EqOn, 0); q.set(Eq3Freq, 1000); q.set(Eq3Gain, 12); },
+             [](Params &q) { q.set(EqOn, 1); }},
+            {"smoothing: switching Compare (bypass) on", [](Params &q) { q.set(OutputGain, 12); },
+             [](Params &q) { q.set(Bypass, 1); }},
+            {"smoothing: Echo mix 10% -> 70%", [](Params &q) { q.set(EchoAdded, 1); q.set(EchoOn, 1); q.set(EchoMix, 10); q.set(EchoTime, 20); q.set(EchoFeedback, 0); },
+             [](Params &q) { q.set(EchoMix, 70); }},
+            {"smoothing: Doubler mix 10% -> 90%", [](Params &q) { q.set(DoublerAdded, 1); q.set(DoublerOn, 1); q.set(DoublerMix, 10); },
+             [](Params &q) { q.set(DoublerMix, 90); }},
+            {"smoothing: Warmth amount 0% -> 100%", [](Params &q) { q.set(WarmthAdded, 1); q.set(WarmthOn, 1); q.set(WarmthAmount, 0); },
+             [](Params &q) { q.set(WarmthAmount, 100); }},
+            {"smoothing: switching Warmth off", [](Params &q) { q.set(WarmthAdded, 1); q.set(WarmthOn, 1); q.set(WarmthAmount, 80); },
+             [](Params &q) { q.set(WarmthOn, 0); }},
+        };
+        for (const Case &c : cases) {
+            Params p; allOff(p); c.setup(p);
+            auto out = runChange(p, in, at, c.change);
+            const double r = clickRatio(out, at);
+            check(r < 2.5, c.name, r);
+        }
+    }
+    // ---- Phase 4: true-peak limiter (catches overs between samples).
+    {
+        // 12 kHz at 45 degrees: every sample is 3 dB below the waveform's real peak.
+        auto hf = [](double ampDb, int frames) {
+            std::vector<float> v(size_t(frames) * 2);
+            const double a = std::pow(10.0, ampDb / 20);
+            for (int i = 0; i < frames; ++i) v[2 * i] = float(a * std::sin(M_PI / 2 * i + M_PI / 4));
+            return v;
+        };
+        Params p; allOff(p); p.set(LimiterOn, 1); p.set(LimiterCeiling, -1);
+        auto out = run(p, hf(+1.0, N));            // samples at -2 dBFS, true peak +1 dBFS
+        const double tp = truePeakDb(out, N / 2);
+        check(tp <= -0.9, "true-peak limiter: no inter-sample overs above -1 dB ceiling", tp);
+        auto voice = run(p, tone(300, -6, N));       // ordinary loud speech-band signal under the ceiling
+        check(std::fabs(rmsDb(voice, N / 2, N) - (-9.01)) < 0.1, "true-peak limiter: signals under the ceiling untouched", rmsDb(voice, N / 2, N) + 9.01);
+        auto loud = run(p, tone(1000, +6, N));
+        check(truePeakDb(loud, N / 2) <= -0.9, "true-peak limiter: +6 dB over the ceiling held at -1 dB", truePeakDb(loud, N / 2));
+    }
+    { // Level analysis (mic test / Setup): speech vs noise floor, clipping, envelope.
+        std::vector<float> x(48000 * 4);
+        unsigned seed = 1;
+        auto noise = [&] { seed = seed * 1664525u + 1013904223u; return (float(seed >> 8) / float(1u << 24) - 0.5f) * 2.0f; };
+        for (size_t i = 0; i < x.size(); ++i) {
+            const bool talking = (i / 24000) % 2 == 1;                         // alternate 0.5 s talk / quiet
+            x[i] = 0.001f * noise() + (talking ? 0.3f * std::sin(2 * 3.14159265f * 200 * float(i) / 48000) : 0.0f);
+        }
+        auto s = analyseLevels(x.data(), x.size(), 48000);
+        check(s.valid && std::fabs(s.speechDb - (-13.5f)) < 1.5f, "levels: speech level of a -10.5 dBFS-peak tone", s.speechDb);
+        check(s.noiseFloorDb < -60 && s.noiseFloorDb > -70, "levels: noise floor of -65 dBFS noise", s.noiseFloorDb);
+        check(s.dynamicRangeDb > 45, "levels: dynamic range = speech - floor", s.dynamicRangeDb);
+        check(s.clipped == 0, "levels: no clipping reported for a clean take", double(s.clipped));
+        for (size_t i = 0; i < 100; ++i) x[i] = 1.0f;
+        check(analyseLevels(x.data(), x.size(), 48000).clipped == 100, "levels: counts full-scale samples", 100);
+        auto env = peakEnvelope(x.data(), x.size(), 400);
+        check(env.size() == 400 && env[0] == 1.0f && env[399] > 0.25f, "levels: waveform envelope", env[399]);
+        check(!analyseLevels(x.data(), 1000, 48000).valid, "levels: too-short take is rejected", 0);
     }
     std::printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;

@@ -23,7 +23,7 @@ Popup {
     onOpened: if (phase === "") page = "profile"
     onClosed: controller.cancelCalibration()
     background: Rectangle { color: Theme.panel; radius: 18; border.color: Theme.border }
-    Overlay.modal: Rectangle { color: "#b0000000" }
+    Overlay.modal: Rectangle { color: Theme.scrim }
 
     function openLearn() { controller.startLearnOthers(); open() }
 
@@ -48,7 +48,7 @@ Popup {
         Layout.fillWidth: true
         implicitHeight: col.implicitHeight + 24
         radius: 12
-        color: selected ? Qt.rgba(accent.r, accent.g, accent.b, 0.14) : (m.containsMouse ? Theme.cardHi : Theme.card)
+        color: selected ? Theme.alpha(accent, 0.14) : (m.containsMouse ? Theme.cardHi : Theme.card)
         border.color: selected ? accent : Theme.border
         border.width: selected ? 2 : 1
         ColumnLayout {
@@ -61,7 +61,7 @@ Popup {
                     width: 16; height: 16; radius: choice.multi ? 4 : 8
                     color: choice.selected ? choice.accent : "transparent"
                     border.color: choice.selected ? choice.accent : Theme.textFaint
-                    Text { anchors.centerIn: parent; visible: choice.selected; text: "✓"; color: "#10131a"; font.pixelSize: 10; font.bold: true }
+                    Text { anchors.centerIn: parent; visible: choice.selected; text: "✓"; color: Theme.onAccent; font.pixelSize: 10; font.bold: true }
                 }
                 Text { text: choice.title; color: Theme.text; font.pixelSize: 14; font.bold: true }
             }
@@ -84,12 +84,12 @@ Popup {
                     spacing: 6
                     Rectangle {
                         width: 22; height: 22; radius: 11
-                        color: index < root.step ? Theme.gate : index === root.step ? Qt.rgba(Theme.gate.r, Theme.gate.g, Theme.gate.b, 0.25) : Theme.track
+                        color: index < root.step ? Theme.gate : index === root.step ? Theme.alpha(Theme.gate, 0.25) : Theme.track
                         border.color: index === root.step ? Theme.gate : "transparent"
                         Text {
                             anchors.centerIn: parent
                             text: index < root.step ? "✓" : index + 1
-                            color: index < root.step ? "#10131a" : Theme.text
+                            color: index < root.step ? Theme.onAccent : Theme.text
                             font.pixelSize: 11; font.bold: true
                         }
                     }
@@ -164,7 +164,7 @@ Popup {
                 title: "Background noise"
                 sub: "PC fans, air conditioning, a mechanical keyboard, traffic. Adds AI noise removal."
                 selected: root.p.needNoise > 0.5
-                accent: "#7ee0c3"
+                accent: Theme.noise
                 onPicked: controller.setParam("needNoise", selected ? 0 : 1)
             }
             Choice {
@@ -172,7 +172,7 @@ Popup {
                 title: "Broadcast-quality sound"
                 sub: "Streaming, podcasts, recording. Smoother gate, firmer compression, de-esser and a touch more clarity."
                 selected: root.p.needBroadcast > 0.5
-                accent: "#c9a0ff"
+                accent: Theme.deess
                 onPicked: controller.setParam("needBroadcast", selected ? 0 : 1)
             }
             Text {
@@ -249,7 +249,7 @@ Popup {
                 implicitHeight: quote.implicitHeight + 26
                 radius: 12
                 color: Theme.card
-                border.color: Qt.rgba(Theme.gate.r, Theme.gate.g, Theme.gate.b, 0.4)
+                border.color: Theme.alpha(Theme.gate, 0.4)
                 Text {
                     id: quote
                     anchors { fill: parent; margins: 13 }
@@ -326,13 +326,13 @@ Popup {
                             readonly property color c: modelData.status === "ok" ? Theme.gate
                                                      : modelData.status === "warn" ? Theme.warn
                                                      : modelData.status === "bad" ? Theme.danger : Theme.textFaint
-                            color: modelData.status === "ok" || modelData.status === "none" ? "transparent" : Qt.rgba(c.r, c.g, c.b, 0.08)
+                            color: modelData.status === "ok" || modelData.status === "none" ? "transparent" : Theme.alpha(c, 0.08)
                             RowLayout {
                                 anchors { fill: parent; leftMargin: 8; rightMargin: 6 }
                                 spacing: 10
                                 Rectangle {
                                     width: 22; height: 22; radius: 11
-                                    color: Qt.rgba(parent.parent.c.r, parent.parent.c.g, parent.parent.c.b, 0.2)
+                                    color: Theme.alpha(parent.parent.c, 0.2)
                                     Text {
                                         anchors.centerIn: parent
                                         text: modelData.status === "ok" ? "✓" : modelData.status === "none" ? "–" : "!"
@@ -402,7 +402,7 @@ Popup {
                     implicitHeight: protCol.implicitHeight + 24
                     radius: 12
                     color: Theme.card
-                    border.color: root.res.closeCheck ? Qt.rgba(Theme.gate.r, Theme.gate.g, Theme.gate.b, 0.5) : Theme.border
+                    border.color: root.res.closeCheck ? Theme.alpha(Theme.gate, 0.5) : Theme.border
                     ColumnLayout {
                         id: protCol
                         anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
@@ -451,7 +451,7 @@ Popup {
                                 function onMetersChanged() { if (controller.gateOpen) { light.sticky = true; lightTimer.restart() } }
                             }
                             Timer { id: lightTimer; interval: 150; onTriggered: light.sticky = false }
-                            color: lit ? Qt.rgba(Theme.gate.r, Theme.gate.g, Theme.gate.b, 0.25) : "#0e1015"
+                            color: lit ? Theme.alpha(Theme.gate, 0.25) : Theme.well
                             border.color: lit ? Theme.gate : Theme.border
                             Text {
                                 anchors.centerIn: parent
@@ -483,6 +483,19 @@ Popup {
                     Text { visible: !root.res.learning; text: root.res.ok ? Theme.fmtDb(root.res.gain) : ""; color: Theme.text; font.pixelSize: 12; font.bold: true }
                     Text { visible: !root.res.learning; text: "Compressor"; color: Theme.textFaint; font.pixelSize: 12 }
                     Text { visible: !root.res.learning; text: root.res.ok && !root.res.learning ? Theme.fmtDb(root.res.compThreshold) + ", boost " + Theme.fmtDb(root.res.makeup) : ""; color: Theme.text; font.pixelSize: 12; font.bold: true }
+                    readonly property var lv: root.res.levels || ({})
+                    Text { visible: !!parent.lv.valid; text: "Voice above room"; color: Theme.textFaint; font.pixelSize: 12 }
+                    Text {
+                        visible: !!parent.lv.valid
+                        text: parent.lv.valid ? Math.round(parent.lv.range) + " dB" + (parent.lv.range >= 25 ? " (good)" : parent.lv.range >= 15 ? " (fair)" : " (low)") : ""
+                        color: parent.lv.range >= 15 ? Theme.text : Theme.warn; font.pixelSize: 12; font.bold: true
+                    }
+                    Text { visible: parent.lv.clips !== undefined; text: "Clipping"; color: Theme.textFaint; font.pixelSize: 12 }
+                    Text {
+                        visible: parent.lv.clips !== undefined
+                        text: parent.lv.clips > 0 ? parent.lv.clips + " samples: lower the gain on your interface" : "none"
+                        color: parent.lv.clips > 0 ? Theme.danger : Theme.text; font.pixelSize: 12; font.bold: true
+                    }
                 }
 
                 Repeater {

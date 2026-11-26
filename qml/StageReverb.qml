@@ -4,7 +4,7 @@ import QtQuick.Layouts
 StagePanel {
     id: root
     title: "Reverb"
-    accent: "#b388ff"
+    accent: Theme.reverb
     enableParam: "reverbOn"
     effectName: "reverb"
     visualWidth: 0
@@ -16,21 +16,21 @@ StagePanel {
         Layout.columnSpan: root.columns
         spacing: 8
         Text { text: "Presets"; color: Theme.textDim; font.pixelSize: 12; font.bold: true }
-        PresetChips { Layout.fillWidth: true; presets: Theme.reverbPresets; accent: "#b388ff" }
+        PresetChips { Layout.fillWidth: true; presets: Theme.reverbPresets; accent: Theme.reverb }
     }
     ParamSlider {
         paramKey: "reverbSize"; label: "Size"; from: 0; to: 100; stepSize: 1
-        accent: "#b388ff"
+        accent: Theme.reverb
         format: (v) => Math.round(v) + " %"
     }
     ParamSlider {
         paramKey: "reverbDamp"; label: "Damping"; from: 0; to: 100; stepSize: 1
-        accent: "#b388ff"
+        accent: Theme.reverb
         format: (v) => Math.round(v) + " %"
     }
     ParamSlider {
         paramKey: "reverbMix"; label: "Mix"; from: 0; to: 100; stepSize: 1
-        accent: "#b388ff"
+        accent: Theme.reverb
         format: (v) => Math.round(v) + " %"
     }
 }

@@ -6,5 +6,5 @@ ToolTip {
     id: tt
     delay: 450
     contentItem: Text { text: tt.text; color: Theme.text; font.pixelSize: 12; wrapMode: Text.WordWrap }
-    background: Rectangle { color: "#0d0f13"; border.color: Theme.border; radius: 8 }
+    background: Rectangle { color: Theme.tooltip; border.color: Theme.border; radius: 8 }
 }

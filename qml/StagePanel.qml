@@ -86,12 +86,13 @@ Rectangle {
 
             RowLayout {
                 Layout.fillWidth: true
-                spacing: 28
+                spacing: flick.width < 760 ? Theme.sp4 : 28
 
                 Item {
                     id: visualBox
                     visible: children.length > 0
-                    Layout.preferredWidth: root.visualWidth
+                    // Narrower on small windows so the controls keep their room.
+                    Layout.preferredWidth: Math.min(root.visualWidth, Math.max(90, flick.width * 0.22))
                     Layout.preferredHeight: Math.max(300, Math.min(560, flick.height - headerRow.height - 40))
                     Layout.alignment: Qt.AlignTop
                     opacity: root.active ? 1 : 0.5
@@ -100,6 +101,7 @@ Rectangle {
                 ColumnLayout {
                     id: ctrlArea
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 0
                     Layout.maximumWidth: 1000
                     Layout.alignment: Qt.AlignTop
                     spacing: 14

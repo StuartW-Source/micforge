@@ -79,6 +79,11 @@ whether a USB mic, headset, or one channel of a multi-input audio interface.
 - R2.10 When the analysis improves in a new version, saved setups are re-tuned automatically from
   the saved recordings.
 
+- R2.10 Each microphone keeps its own Setup; switching microphones restores it, and no microphone's Setup
+  is ever lost by switching.
+- R2.11 Setup detects clipping before MicForge (in the mic or interface) and a voice too close to the room
+  noise, and says how to fix it.
+
 ## R3. Effects
 
 - R3.1 Every effect is optional and **removable**, except Input and Output. Effects are added from an
@@ -108,16 +113,23 @@ whether a USB mic, headset, or one channel of a multi-input audio interface.
 - R4.1 Plain-English names, summaries and help for every control. Rarely needed controls hide under
   "Advanced". All wording is neutral and makes no assumptions about the user or the people around them.
 - R4.2 Live visual feedback for every stage: meters, activity lights and gain reduction.
-- R4.3 One window that scales to many effects:
-  - a **chain strip** for an overview,
-  - a **detail panel** for editing,
-  - an always-visible **Live** column with input/output meters, gate state and whether an app is
-    using the virtual mic.
+- R4.3 One window organised into pages (Overview, Voice Isolation, Effects, Audio Devices, Presets,
+  Settings; Diagnostics in Phase 3):
+  - the **Overview** answers "is it working and what are apps hearing?" at a glance (state, mic,
+    virtual mic in use, levels, voice isolation, quick controls),
+  - the **Effects** page keeps a **chain strip** for the processing order, a **detail panel** for
+    editing and a **Live** column (meters, gate state, whether an app is using the virtual mic),
+  - the window stays usable from 860×600 up to large screens.
 - R4.4 **Compare** (hear the raw mic) and **Listen** (hear yourself in headphones).
 - R4.5 The user chooses which microphone and which interface channel is processed.
 - R4.6 Settings persist automatically. Sound presets can be saved, and built-in presets never undo
   the user's setup or remove effects they've added.
 - R4.7 Runs in the system tray. Optional start at login, optionally hidden.
+- R4.8 **Mute** from the window, the tray and a keyboard shortcut. Mute is never saved, so MicForge never
+  starts muted. The current state (processing, muted, bypassed, waiting for the mic, disconnected) is
+  always visible in the window and the tray.
+- R4.9 Consistent look from shared design tokens; light, dark and follow-the-system themes; full keyboard
+  operation with a visible focus indicator; accessible names for controls; sharp at any display scale.
 
 ## R5. Technical
 
@@ -130,6 +142,29 @@ whether a USB mic, headset, or one channel of a multi-input audio interface.
 - R5.4 A test instance (`MICFORGE_TEST=1`) runs alongside the real one with its own settings,
   recordings and virtual mic, so development and screenshots never interrupt a live call.
 - R5.5 Automated tests cover the DSP, the voice-separation analysis and the plugin hosts.
+
+## R7. Reliability and start-up
+
+- R7.1 MicForge always starts. A missing *optional* library (rnnoise, lilv) disables only that feature
+  (loaded at run time). Only Qt and the platform audio system are hard requirements.
+- R7.2 One instance per user. A second launch shows the existing window. A frozen instance is detected
+  and can be replaced. Stale locks after a crash are recovered.
+- R7.3 The audio engine retries until the audio system is reachable and reconnects after it restarts,
+  re-creating the virtual microphone. No fixed start-up delays.
+- R7.4 A disconnected input device is never silently replaced by another microphone.
+- R7.5 Safe mode (manual, or automatic after two failed starts) bypasses plugins and saved sound settings
+  and never writes the user's configuration.
+- R7.6 Settings and calibration are never silently deleted: daily backups, damaged files preserved,
+  invalid values fall back to defaults.
+- R7.7 Start-up problems are diagnosable: rotating log file, journal messages, visible error dialogs.
+- R7.9 A Diagnostics page shows engine state, devices, sample rate, block size, latency, processing load,
+  glitch counters, plugin errors and the log, and lists problems in plain English.
+- R7.10 Diagnostic reports never contain audio or recordings, and always remove the home folder, user and
+  computer names, preset names and file paths. Device names and log lines are included only on request.
+- R7.11 A mic test records raw and processed sound together and plays either back to the user only
+  (never to apps using the virtual mic), loudness-matched, with WAV export on request.
+- R7.8 Start at login uses XDG autostart only (no competing systemd service). It works when the tray
+  isn't ready yet, and the entry always points at an installed copy.
 
 ## R6. Distribution
 

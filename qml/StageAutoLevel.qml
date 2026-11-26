@@ -4,7 +4,7 @@ import QtQuick.Layouts
 StagePanel {
     id: root
     title: "Auto Level"
-    accent: "#8fd16a"
+    accent: Theme.autolevel
     enableParam: "autoLevelOn"
     effectName: "autoLevel"
     visualWidth: 220
@@ -23,7 +23,7 @@ StagePanel {
         Text { text: "Currently adjusting by"; color: Theme.textDim; font.pixelSize: 12 }
         Text {
             text: (root.shown >= 0 ? "+" : "−") + Math.abs(root.shown).toFixed(1) + " dB"
-            color: "#8fd16a"; font.pixelSize: 30; font.weight: Font.Bold; font.family: Theme.mono
+            color: Theme.autolevel; font.pixelSize: 30; font.weight: Font.Bold; font.family: Theme.mono
         }
         // Centre-zero bar: left = turning down, right = turning up.
         Rectangle {
@@ -37,7 +37,7 @@ StagePanel {
                 x: frac >= 0 ? parent.width / 2 : parent.width / 2 + frac * parent.width / 2
                 width: Math.abs(frac) * parent.width / 2
                 height: parent.height; radius: 7
-                color: "#8fd16a"
+                color: Theme.autolevel
             }
         }
         RowLayout {
@@ -51,13 +51,13 @@ StagePanel {
 
     ParamSlider {
         paramKey: "autoLevelTarget"; label: "Target level"; from: -36; to: -6; stepSize: 0.5
-        accent: "#8fd16a"
+        accent: Theme.autolevel
         format: (v) => Theme.fmtDb(v)
         help: "How loud your speech should sit on average. −18 dB suits most voice chat."
     }
     ParamSlider {
         paramKey: "autoLevelMaxGain"; label: "Max adjustment"; from: 0; to: 24; stepSize: 0.5
-        accent: "#8fd16a"
+        accent: Theme.autolevel
         format: (v) => "± " + v.toFixed(1) + " dB"
         help: "The most it will turn you up or down."
     }
@@ -69,7 +69,7 @@ StagePanel {
             Layout.fillWidth: true
             paramKey: "autoLevelSpeed"
             options: ["Slow & smooth", "Medium", "Fast"]
-            accent: "#8fd16a"
+            accent: Theme.autolevel
         }
     }
 }
