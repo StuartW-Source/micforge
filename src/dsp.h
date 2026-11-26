@@ -332,6 +332,64 @@ struct PlosiveGuard {
     }
 };
 
+// Breath reduction. Every 20 ms it checks the sound for pitch (autocorrelation at 70-400 Hz on a 12 kHz
+// copy), for hiss ("s": energy above 4.5 kHz) and for level against your recent speech. A breath is
+// unpitched, not hissy, at least 10 dB below your speech, and lasts: after 160 ms of that in a row the
+// sound is turned down (20 ms fade), and any pitched sound brings it straight back. Short unpitched sounds
+// inside words ("h", "f", "t", under 160 ms) are never touched. Whispers are unpitched too, so this is
+// opt-in. The first 160 ms of a breath pass (no extra delay is added to detect it).
+struct BreathReducer {
+    static constexpr int kFrame = 960, kDec = 4, kDecFrame = kFrame / kDec, kRunFrames = 8;
+    Biquad aa, hp; // anti-alias for the 12 kHz copy; 4.5 kHz high-pass for hiss
+    std::array<float, kDecFrame> dec{};
+    int pos = 0, decPos = 0, run = 0;
+    double eAll = 0, eHi = 0;
+    float speechDb = -120, gain = 1, target = 1, depth = 0.25f, kGain = 0.001f, fs = 48000;
+    void configure(float sampleRate, float amountDb) {
+        fs = sampleRate;
+        aa.set(Biquad::LP, fs, 3000, 0.7071);
+        hp.set(Biquad::HP, fs, 4500, 0.7071);
+        depth = dbToLin(-amountDb);
+        kGain = 1.0f - onePole(20.0f, fs);
+    }
+    void reset() { aa.reset(); hp.reset(); pos = decPos = run = 0; eAll = eHi = 0; gain = target = 1; speechDb = -120; }
+    // Normalised autocorrelation peak over pitch lags (0 = noise, 1 = perfectly periodic).
+    float periodicity() const {
+        double e0 = 0;
+        for (float v : dec) e0 += double(v) * v;
+        if (e0 < 1e-12) return 0;
+        float best = 0;
+        for (int lag = 12000 / 400; lag <= 12000 / 70; ++lag) {
+            double c = 0, e1 = 0, e2 = 0;
+            for (int k = 0; k + lag < kDecFrame; ++k) { c += double(dec[size_t(k)]) * dec[size_t(k + lag)]; e1 += double(dec[size_t(k)]) * dec[size_t(k)]; e2 += double(dec[size_t(k + lag)]) * dec[size_t(k + lag)]; }
+            if (e1 > 0 && e2 > 0) best = std::max(best, float(c / std::sqrt(e1 * e2)));
+        }
+        return best;
+    }
+    void endFrame() {
+        const float eDb = float(10.0 * std::log10(eAll / kFrame + 1e-14));
+        const float hiShare = float(eHi / (eAll + 1e-14));
+        const float r = periodicity();
+        const bool voiced = r > 0.6f && eDb > -70.0f;
+        if (voiced) speechDb = std::max(speechDb, eDb);
+        else speechDb -= 0.1f; // the reference slowly forgets (5 dB per second without speech)
+        const bool breathy = !voiced && r < 0.5f && hiShare < 0.5f && eDb > -75.0f && eDb < speechDb - 10.0f;
+        run = breathy ? run + 1 : 0;
+        target = run >= kRunFrames ? depth : 1.0f;
+        if (voiced) { target = 1.0f; gain = std::max(gain, 0.5f); } // pitched sound returns quickly
+        eAll = eHi = 0;
+    }
+    inline float process(float x) {
+        const float h = hp.process(x);
+        eAll += double(x) * x; eHi += double(h) * h;
+        const float a = aa.process(x);
+        if ((pos & (kDec - 1)) == 0) dec[size_t(decPos++)] = a;
+        if (++pos == kFrame) { pos = 0; decPos = 0; endFrame(); }
+        gain += kGain * (target - gain);
+        return x * gain;
+    }
+};
+
 // Crossfades a stage in and out (10 ms) when it's switched on or off, instead of cutting.
 struct StageFade {
     float mix = 0, stepSize = 1.0f / 480.0f;
@@ -534,6 +592,7 @@ private:
         if (fHum.starting()) hum.reset();
         if (fGate.starting()) resetGate();
         if (fAl.starting()) al.reset();
+        if (fBreath.starting()) breath.reset();
         if (fComp.starting()) compGrDb = 0;
         if (fDeess.starting()) { deHp.reset(); deShelf.reset(); deEnv = deRed = 0; }
         if (fVc.starting()) { vc.reset(); vcLo.reset(); vcHi.reset(); vcBpHp.reset(); vcBpLp.reset(); }
@@ -669,6 +728,9 @@ private:
                 gateRed = std::max(gateRed, -gateGainDb);
                 x = fGate.apply(x, delayed * dbToLin(gateGainDb));
             }
+
+            // 4a. Breath reduction (opt-in).
+            if (fBreath.running()) x = fBreath.apply(x, breath.process(x));
 
             // 4b. Auto level: steer your speaking level to a target (frozen in pauses).
             if (fAl.running()) x = fAl.apply(x, al.process(x, fGate.on ? gateIsOpen : true));
@@ -891,6 +953,8 @@ private:
         fTone.set(active(ToneAdded, ToneOn), jump, fs);
         pluginsOn = active(PluginsAdded, PluginsOn);
 
+        fBreath.set(p.get(BreathOn) > 0.5f, jump, fs);
+        breath.configure(fs, p.get(BreathAmount));
         fAl.set(active(AutoLevelAdded, AutoLevelOn), jump, fs);
         al.configure(fs, p.get(AutoLevelTarget), p.get(AutoLevelMaxGain), int(p.get(AutoLevelSpeed) + 0.5f));
 
@@ -932,7 +996,7 @@ private:
 
     static constexpr int kMaxBlock = 1024;
     std::array<float, kMaxBlock> raw{}; // input after channel + gain (for the bypass crossfade)
-    StageFade fBypass, fNoise, fHum, fLowCut, fGate, fAl, fComp, fDeess, fVc, fEq, fTone, fWarm, fEx, fDbl, fEcho, fRev, fLim;
+    StageFade fBypass, fNoise, fHum, fLowCut, fGate, fBreath, fAl, fComp, fDeess, fVc, fEq, fTone, fWarm, fEx, fDbl, fEcho, fRev, fLim;
 
     int channel = 0;
     Smoothed inGainS;
@@ -995,6 +1059,7 @@ private:
     bool muted = false;
     float muteGain = 1.0f, muteStep = 1.0f / 480.0f;
     AutoLevel al;
+    BreathReducer breath;
     VoiceChanger vc;
     Biquad vcLo, vcHi, vcBpHp, vcBpLp;
     Warmth warm;

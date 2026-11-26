@@ -89,7 +89,7 @@ ColumnLayout {
         SpectrumView {
             visible: specCard.open
             Layout.fillWidth: true
-            Layout.preferredHeight: 170
+            Layout.preferredHeight: root.height < 700 ? 100 : 170
             onVisibleChanged: controller.spectrum.active = visible && root.visible
         }
     }

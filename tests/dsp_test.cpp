@@ -664,6 +664,45 @@ int main() {
         check(std::fabs(peakHz / 1000 - 1) < 0.05 && std::fabs(bands[size_t(peak)] + 12.04) < 1.0, "spectrum: 1 kHz at -12 dB lands in the right band", bands[size_t(peak)]);
         check(bands[5] < -80, "spectrum: no energy reported far from the tone (60 Hz band)", bands[5]);
     }
+    // ---- Phase 4: breath reduction (opt-in). Phrase / breath / phrase with an "s" and an "h" start.
+    {
+        const int L = 48000 * 4;
+        auto voice = synthVoice(L, 0.3f);
+        std::vector<float> in(static_cast<size_t>(L) * 2);
+        std::vector<char> part(static_cast<size_t>(L), 0); // 1 voice, 2 breath, 3 "s", 4 "h"
+        Biquad bHp, bLp, sHp, hHp, hLp;
+        bHp.set(Biquad::HP, 48000, 300, 0.7); bLp.set(Biquad::LP, 48000, 3000, 0.7);
+        sHp.set(Biquad::HP, 48000, 4500, 0.7);
+        hHp.set(Biquad::HP, 48000, 500, 0.7); hLp.set(Biquad::LP, 48000, 2500, 0.7);
+        unsigned sd = 11;
+        for (int i = 0; i < L; ++i) {
+            sd = sd * 1664525u + 1013904223u;
+            const float wn = ((sd >> 8) / float(1u << 24) - 0.5f) * 3.46f;
+            const double t = std::fmod(i / 48000.0, 2.0);
+            float x = 0; char k = 0;
+            if (t < 0.9) { x = voice[size_t(i)]; k = 1; }                                             // phrase
+            else if (t >= 1.0 && t < 1.45) { x = 0.012f * bLp.process(bHp.process(wn)); k = 2; }    // breath, ~-24 dB
+            else if (t >= 1.5 && t < 1.62) { x = 0.05f * sHp.process(wn); k = 3; }                  // "s"
+            else if (t >= 1.7 && t < 1.8) { x = 0.03f * hLp.process(hHp.process(wn)); k = 4; }       // "h" of a word start
+            else if (t >= 1.8) { x = voice[size_t(i)]; k = 1; }                                       // ...then voiced
+            in[2 * size_t(i)] = x; part[size_t(i)] = k;
+        }
+        auto energyDb = [&](const std::vector<float> &y, char k, bool isOut) {
+            double e = 0;
+            for (int i = 48000 * 2; i < L; ++i) if (part[size_t(i)] == k) { const float v = isOut ? y[size_t(i)] : in[2 * size_t(i)]; e += double(v) * v; }
+            return 10 * std::log10(e + 1e-20);
+        };
+        Params off; allOff(off);
+        Params on; allOff(on); on.set(BreathOn, 1);
+        auto yOff = run(off, in), yOn = run(on, in);
+        std::printf("       (breath reduction off = previous behaviour: breath cut %.1f dB)\n", energyDb(in, 2, false) - energyDb(yOff, 2, true));
+        // The original target was 6 dB. Without look-ahead the first 160 ms of a breath must pass (so "h"/"f"
+        // inside words are safe), which limits a 450 ms breath to about 4 dB overall: hence 3 dB here.
+        check(energyDb(in, 2, false) - energyDb(yOn, 2, true) > 3, "breath reduction: breath turned down (dB)", energyDb(in, 2, false) - energyDb(yOn, 2, true));
+        check(std::fabs(energyDb(yOn, 1, true) - energyDb(yOff, 1, true)) < 0.3, "breath reduction: voiced speech untouched (dB)", energyDb(yOn, 1, true) - energyDb(yOff, 1, true));
+        check(std::fabs(energyDb(yOn, 3, true) - energyDb(yOff, 3, true)) < 0.5, "breath reduction: 's' untouched (dB)", energyDb(yOn, 3, true) - energyDb(yOff, 3, true));
+        check(std::fabs(energyDb(yOn, 4, true) - energyDb(yOff, 4, true)) < 1.0, "breath reduction: 'h' at a word start untouched (dB)", energyDb(yOn, 4, true) - energyDb(yOff, 4, true));
+    }
     { // A sustained vowel ("aaah", 2.5 s, perfectly steady) is not mistaken for background noise.
         const int L = 48000 * 4;
         std::vector<float> in(static_cast<size_t>(L) * 2);

@@ -262,6 +262,23 @@ StagePanel {
             help: "How sure the detector must be that it hears speech. Higher keeps out more typing and noise; if the start of your words gets cut, lower it."
             format: function(v) { return Math.round(v) + "%" }
         }
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.bottomMargin: 6
+            spacing: 10
+            ToggleSwitch { paramKey: "breathOn"; accent: Theme.gate; label: "Reduce breaths" }
+            Text { text: "Reduce breaths (experimental)"; color: Theme.text; font.pixelSize: 12 }
+            HelpButton { text: "Turns down breaths between your sentences. It waits until a sound has been breath-like (no pitch, no hiss, well below your voice) for about a sixth of a second, so short sounds inside words (h, f, t) are never touched, but the start of each breath still passes.\n\nWhispering has no pitch either: leave this off if you whisper." }
+        }
+        ParamSlider {
+            visible: root.p.breathOn > 0.5
+            Layout.fillWidth: true
+            Layout.maximumWidth: 460
+            Layout.bottomMargin: 6
+            paramKey: "breathAmount"; label: "Turn breaths down by"; from: 3; to: 30; stepSize: 1
+            accent: Theme.gate
+            format: function(v) { return Math.round(v) + " dB" }
+        }
         Text { text: "When you're not talking"; color: Theme.textDim; font.pixelSize: 12 }
         Segmented {
             Layout.fillWidth: true
