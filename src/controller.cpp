@@ -400,6 +400,15 @@ void Controller::pollMeters() {
     m_compReduction = m.compReduction.exchange(0);
     m_autoLevelGain = m.autoLevelGain.load();
     m_gateTilt = m.gateTilt.exchange(-120);
+    {
+        // Show the most important reason seen recently ("open" or a rejection beats "too quiet") for ~0.3 s.
+        const int code = m.gateReason.exchange(0);
+        if (code >= m_reasonCode || --m_reasonHold <= 0) { m_reasonCode = code; m_reasonHold = 10; }
+        static const char *names[] = {"", "quiet", "noise", "far", "open"};
+        m_gateReason = QString::fromLatin1(names[std::clamp(m_reasonCode, 0, 4)]);
+        m_gateFloor = m.gateFloor.load();
+        m_gateOpenAt = m.gateOpenAt.load();
+    }
     m_deessReduction = m.deessReduction.exchange(0);
     m_outPeak = m.outPeak.exchange(-120);
     m_limReduction = m.limReduction.exchange(0);

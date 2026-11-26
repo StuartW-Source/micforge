@@ -74,7 +74,11 @@ StagePanel {
                 }
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: !root.active ? "gate bypassed" : gateLight.lit ? "you're talking" : "mic muted"
+                    text: !root.active ? "gate bypassed"
+                        : gateLight.lit ? (root.p.gateCloseCheck > 0.5 ? "loud + close enough" : "loud enough")
+                        : controller.gateReason === "far" ? "not close enough"
+                        : controller.gateReason === "noise" ? "background noise"
+                        : "too quiet"
                     color: Theme.textFaint
                     font.pixelSize: 11
                 }
@@ -208,6 +212,34 @@ StagePanel {
         Layout.fillWidth: true
         Layout.columnSpan: root.columns
         spacing: 6
+        // Why the gate is doing what it does, in one plain sentence.
+        Text {
+            Layout.fillWidth: true
+            Layout.bottomMargin: 6
+            visible: root.active
+            wrapMode: Text.WordWrap
+            color: controller.gateReason === "far" || controller.gateReason === "noise" ? Theme.text : Theme.textDim
+            font.pixelSize: 12
+            text: {
+                var thr = Theme.fmtDb(controller.gateOpenAt > -119 ? controller.gateOpenAt : root.p.gateThreshold)
+                // Open/closed comes from the same light as the box above; the reason explains a closed gate.
+                switch (gateLight.lit ? "open" : controller.gateReason) {
+                case "open": return "Why it's open: the sound is above " + thr + (root.p.gateCloseCheck > 0.5 ? " and sounds close to the mic." : ".")
+                case "far": return "Why it's closed: loud enough, but it doesn't sound close to the mic (another voice, or a speaker)."
+                case "noise": return "Why it's closed: steady background noise at about " + Theme.fmtDb(controller.gateFloor) + ", so the gate now opens above " + thr + " instead of " + Theme.fmtDb(root.p.gateThreshold) + "."
+                default: return "Why it's closed: nothing is above " + thr + "."
+                    + (controller.gateFloor > -119 && root.p.gateAdaptive > 0.5 ? " Background noise: about " + Theme.fmtDb(controller.gateFloor) + "." : "")
+                }
+            }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.bottomMargin: 6
+            spacing: 10
+            ToggleSwitch { paramKey: "gateAdaptive"; accent: Theme.gate; label: "Ignore steady background noise" }
+            Text { text: "Ignore steady background noise"; color: Theme.text; font.pixelSize: 12 }
+            HelpButton { text: "If a fan, air conditioning or other steady noise gets louder than the gate's threshold, the gate raises its threshold just above it, so the noise stays out and your voice still opens it. It only reacts to sound that stays steady in the gaps between your words for a few seconds, so your voice is never mistaken for noise." }
+        }
         Text { text: "When you're not talking"; color: Theme.textDim; font.pixelSize: 12 }
         Segmented {
             Layout.fillWidth: true

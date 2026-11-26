@@ -45,7 +45,13 @@ struct Meters {
     std::atomic<float> gateLevel{-120};    // gate detector level, dB
     std::atomic<float> gateReduction{0};   // dB of attenuation (positive)
     std::atomic<float> gateOpen{0};        // 1 if open at any point
-    std::atomic<float> gateTilt{-120};     // closeness (bass minus treble, dB) of current sound; -120 = silence
+    std::atomic<float> gateTilt{-120};
+    // Why the gate is open or closed (highest during the block): 0 = gate off, 1 = closed: too quiet,
+    // 2 = closed: steady background noise raised the threshold, 3 = closed: loud enough but not close
+    // enough, 4 = open.
+    std::atomic<int> gateReason{0};
+    std::atomic<float> gateFloor{-120};    // steady background level the gate measured, dB (-120 = none)
+    std::atomic<float> gateOpenAt{-120};   // threshold in use (raised above the setting by background noise)     // closeness (bass minus treble, dB) of current sound; -120 = silence
     std::atomic<float> compLevel{-120};    // compressor detector input, dB
     std::atomic<float> compReduction{0};   // dB (positive)
     std::atomic<float> deessReduction{0};  // dB (positive)
@@ -360,6 +366,62 @@ private:
         tilt.reset();
         gateIsOpen = false; gateHoldLeft = 0; gateGainDb = 0;
         gDelay.fill(0); gPos = 0;
+        frameMax = 0; frameCount = 0; swSum = swSq = 0; swFrames = 0; swHead = swCount = 0; floorValid = false;
+        applyFloor();
+    }
+
+    // ---- Adaptive noise floor. Every 20 ms the detector's peak level is noted; every 0.5 s the spread of
+    // those peaks is checked. Steady sound (spread < 2.5 dB) may be background: fans, hum, hiss. The floor
+    // is the quietest steady half-second of the last 4 s, and it only RISES when that steadiness is
+    // confirmed: either in at least two separate gaps (background that persists between phrases), or for
+    // 3 s without a break. Speech is never steady; a sustained vowel is one stretch, and in a quiet room the
+    // pauses around it keep the floor low. The floor FALLS at once when a quieter steady half-second appears.
+    // The threshold in use is raised only when that background would otherwise reach the gate's close level.
+    inline void trackFloor(float env) {
+        frameMax = std::max(frameMax, env);
+        if (++frameCount < kFloorFrame) return;
+        const float f = linToDb(frameMax);
+        frameMax = 0; frameCount = 0;
+        swSum += f; swSq += f * f;
+        if (++swFrames < kFloorFrames) return;
+        const float mu = swSum / swFrames, sigma = std::sqrt(std::max(0.0f, swSq / swFrames - mu * mu));
+        swSum = swSq = 0; swFrames = 0;
+
+        const bool steady = sigma < 2.5f && mu > -110.0f;
+        swHist[size_t(swHead)] = steady ? mu + 2.0f * sigma : kNotSteady;
+        swHead = (swHead + 1) % kFloorHistory;
+        if (swCount < kFloorHistory) ++swCount;
+
+        float lowest = kNotSteady;
+        int runs = 0, run = 0, longest = 0;
+        for (int k = 0; k < swCount; ++k) { // oldest to newest
+            const float c = swHist[size_t((swHead - swCount + k + kFloorHistory) % kFloorHistory)];
+            if (c != kNotSteady) {
+                lowest = std::min(lowest, c);
+                if (run++ == 0) ++runs;
+                longest = std::max(longest, run);
+            } else {
+                run = 0;
+            }
+        }
+        if (lowest != kNotSteady) {
+            if (floorValid && lowest < floorDb) floorDb = lowest;                   // quieter: follow at once
+            else if ((runs >= 2 || longest >= kFloorRiseRun) && (!floorValid || lowest > floorDb)) {
+                floorDb = lowest;
+                floorValid = true;
+            }
+        }
+        applyFloor();
+    }
+    void applyFloor() {
+        float closeDb = gateThrDb - gateHystDb, openDb = gateThrDb;
+        // Noise peaks occasionally exceed the measured floor: close 3 dB above it, open 5 dB above it.
+        if (adaptive && floorValid && floorDb + 3.0f > closeDb) {
+            closeDb = floorDb + 3.0f;
+            openDb = std::max(gateThrDb, closeDb + 2.0f);
+        }
+        effOpenLin = dbToLin(openDb);
+        effCloseLin = dbToLin(closeDb);
     }
 
     // A stage that is about to fade in starts from a clean state (no stale filter memory or tails).
@@ -455,17 +517,20 @@ private:
                 // Opening needs: loud enough AND (if enabled) close enough. Closeness only decides
                 // OPENING: every syllable has a vowel that passes it, and level + hold then carry the
                 // brighter consonants (s, t, k) through, so your words aren't chopped.
+                trackFloor(env);
                 const bool closeOpen = !closeCheck || (tiltBrighter ? tilt.below(tiltOpenPow) : tilt.above(tiltOpenPow));
                 float target;
-                if (env > gateOpenLin && closeOpen) {
+                if (env > effOpenLin && closeOpen) {
                     gateIsOpen = true;
                     gateHoldLeft = gateHoldSamples;
-                } else if (env < gateCloseLin) {
+                } else if (env < effCloseLin) {
                     if (gateHoldLeft > 0) --gateHoldLeft;
                     else gateIsOpen = false;
                 } else if (gateIsOpen) {
                     gateHoldLeft = gateHoldSamples;
                 }
+                const int reason = gateIsOpen ? 4 : env > effOpenLin && !closeOpen ? 3 : env > gateOpenLin ? 2 : 1;
+                gateReasonMax = std::max(gateReasonMax, reason);
                 if (gateIsOpen) target = 0.0f;
                 else if (expander) target = std::max(gateRangeDb, (linToDb(env) - gateThrDb) * (gateRatio - 1.0f));
                 else target = gateRangeDb;
@@ -604,6 +669,10 @@ private:
             Meters::bump(m.gateLevel, linToDb(gateLvl));
             Meters::bump(m.gateReduction, gateRed);
             Meters::bump(m.gateOpen, anyOpen ? 1.0f : 0.0f);
+            if (gateReasonMax > m.gateReason.load(std::memory_order_relaxed)) m.gateReason.store(gateReasonMax, std::memory_order_relaxed);
+            gateReasonMax = 0;
+            m.gateFloor.store(floorValid ? floorDb : -120.0f, std::memory_order_relaxed);
+            m.gateOpenAt.store(linToDb(effOpenLin), std::memory_order_relaxed);
         }
         if (fComp.on) {
             Meters::bump(m.compLevel, compLvlDb);
@@ -645,7 +714,10 @@ private:
         tiltOpenPow = std::pow(10.0f, p.get(GateTilt) / 10.0f);
         gateThrDb = p.get(GateThreshold);
         gateOpenLin = dbToLin(gateThrDb);
-        gateCloseLin = dbToLin(gateThrDb - p.get(GateHysteresis));
+        gateHystDb = p.get(GateHysteresis);
+        gateCloseLin = dbToLin(gateThrDb - gateHystDb);
+        adaptive = p.get(GateAdaptive) > 0.5f;
+        applyFloor();
         gateRangeDb = p.get(GateRange);
         gateRatio = p.get(GateRatio);
         gateHoldSamples = int(p.get(GateHold) * 0.001f * fs);
@@ -748,6 +820,15 @@ private:
     int gateHoldSamples = 0, gateHoldLeft = 0;
     float gAtk = 0, gRel = 0, gateGainDb = 0;
     bool gateIsOpen = false;
+    int gateReasonMax = 0;
+    // Adaptive noise floor (see trackFloor).
+    static constexpr int kFloorFrame = 960, kFloorFrames = 25, kFloorRiseRun = 6, kFloorHistory = 8; // 20 ms, 0.5 s, 3 s, 4 s
+    static constexpr float kNotSteady = 1e9f;
+    bool adaptive = true, floorValid = false;
+    float gateHystDb = 4, effOpenLin = 0.1f, effCloseLin = 0.06f;
+    float frameMax = 0, swSum = 0, swSq = 0, floorDb = -120;
+    std::array<float, kFloorHistory> swHist{};
+    int frameCount = 0, swFrames = 0, swHead = 0, swCount = 0;
     static constexpr int kGateSize = 1024, kGateMask = kGateSize - 1;
     std::array<float, kGateSize> gDelay{};
     int gPos = 0, gLookahead = 0;

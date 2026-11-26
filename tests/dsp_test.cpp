@@ -461,6 +461,86 @@ int main() {
         auto loud = run(p, tone(1000, +6, N));
         check(truePeakDb(loud, N / 2) <= -0.9, "true-peak limiter: +6 dB over the ceiling held at -1 dB", truePeakDb(loud, N / 2));
     }
+    // ---- Phase 4: adaptive noise floor (steady background that gets louder can't hold the gate open).
+    {
+        const int L = 48000 * 16, step = 48000 * 4;
+        std::vector<float> in(static_cast<size_t>(L) * 2), noiseOnly(static_cast<size_t>(L), 0.0f);
+        std::vector<char> talking(static_cast<size_t>(L));
+        unsigned seed = 3;
+        for (int i = 0; i < L; ++i) {
+            seed = seed * 1664525u + 1013904223u;
+            const float wn = (float(seed >> 8) / float(1u << 24) - 0.5f) * 3.46f;   // unit-RMS white noise
+            const float nAmp = i < step ? 0.001f : 0.025f;                           // -60 dB, then -32 dB (a fan)
+            const bool talk = std::fmod(i / 48000.0, 1.5) < 0.4;                     // 0.4 s phrase every 1.5 s
+            const float v = talk ? 0.18f * float(std::sin(2 * M_PI * 300 * i / 48000.0)) : 0.0f;
+            in[2 * size_t(i)] = v + nAmp * wn;
+            noiseOnly[size_t(i)] = nAmp * wn;
+            talking[size_t(i)] = talk;
+        }
+        Params p; allOff(p); p.set(GateOn, 1); p.set(GateFocus, 0); p.set(GateThreshold, -40); p.set(GateHysteresis, 4);
+        p.set(GateRange, -30); p.set(GateCloseCheck, 0); p.set(GateLookahead, 3);
+        auto out = run(p, in);
+        auto energy = [&](int from, int to, bool wantTalk, const std::vector<float> &x, bool inputLeft) {
+            double e = 0;
+            for (int i = from; i < to; ++i) {
+                // skip 0.3 s after each phrase (hold + release) so we measure the steady state
+                const double ph = std::fmod(i / 48000.0, 1.5);
+                if (bool(talking[size_t(i)]) != wantTalk || (!wantTalk && ph < 0.7)) continue;
+                const float v = inputLeft ? x[2 * size_t(i)] : x[size_t(i)];
+                e += double(v) * v;
+            }
+            return 10 * std::log10(e + 1e-20);
+        };
+        const double quietNoiseCut = energy(48000, step, false, in, true) - energy(48000, step, false, out, false);
+        // Measured from 5 s after the fan starts (the floor needs ~4 s of evidence).
+        const double fanNoiseCut = energy(step + 5 * 48000, L, false, in, true) - energy(step + 5 * 48000, L, false, out, false);
+        const double voiceLoss = energy(step + 5 * 48000, L, true, in, true) - energy(step + 5 * 48000, L, true, out, false);
+        check(quietNoiseCut > 25, "adaptive gate: quiet room still gated (dB cut)", quietNoiseCut);
+        check(fanNoiseCut > 20, "adaptive gate: louder fan noise gated after it starts (dB cut)", fanNoiseCut);
+        check(voiceLoss < 1.0, "adaptive gate: speech over the fan still passes (dB lost)", voiceLoss);
+    }
+    { // Speech never counts as "background": 6 s of continuous syllables (4 Hz), no pauses longer than 60 ms.
+        const int L = 48000 * 6;
+        std::vector<float> in(size_t(L) * 2);
+        for (int i = 0; i < L; ++i) {
+            const double t = i / 48000.0;
+            const double syl = 0.5 + 0.5 * std::sin(2 * M_PI * 4 * t);             // syllable envelope
+            in[2 * size_t(i)] = float(0.18 * (0.15 + 0.85 * syl) * std::sin(2 * M_PI * 300 * t));
+        }
+        Params p; allOff(p); p.set(GateOn, 1); p.set(GateFocus, 0); p.set(GateThreshold, -40); p.set(GateRange, -30);
+        p.set(GateCloseCheck, 0);
+        auto out = run(p, in);
+        double ei = 0, eo = 0;
+        for (int i = 48000; i < L; ++i) { ei += double(in[2 * size_t(i)]) * in[2 * size_t(i)]; eo += double(out[size_t(i)]) * out[size_t(i)]; }
+        check(10 * std::log10(ei / eo) < 0.5, "adaptive gate: continuous speech never treated as noise (dB lost)", 10 * std::log10(ei / eo));
+    }
+    { // Gate decision reasons: too quiet / not close enough / open.
+        auto reasonFor = [](std::vector<float> in, bool closeCheck) {
+            Params p; allOff(p); p.set(GateOn, 1); p.set(GateFocus, 0); p.set(GateThreshold, -40);
+            p.set(GateCloseCheck, closeCheck ? 1 : 0); p.set(GateTilt, 6); p.set(GateTiltDir, 0);
+            VoiceChain c(48000); Meters m; std::vector<float> out(256);
+            for (size_t i = 0; i + 512 <= in.size(); i += 512) { m.gateReason = 0; c.process(in.data() + i, 2, out.data(), 256, p, m); }
+            return m.gateReason.load();
+        };
+        check(reasonFor(tone(200, -70, N), false) == 1, "gate reason: quiet sound -> 'too quiet'", reasonFor(tone(200, -70, N), false));
+        check(reasonFor(tone(200, -15, N), false) == 4, "gate reason: loud sound -> 'open'", reasonFor(tone(200, -15, N), false));
+        // A loud 2.5 kHz sound has no bass at all: "far away" for a bass-requiring closeness check.
+        check(reasonFor(tone(2500, -15, N), true) == 3, "gate reason: loud but not close -> 'not close enough'", reasonFor(tone(2500, -15, N), true));
+    }
+    { // A sustained vowel ("aaah", 2.5 s, perfectly steady) is not mistaken for background noise.
+        const int L = 48000 * 4;
+        std::vector<float> in(static_cast<size_t>(L) * 2);
+        for (int i = 0; i < L; ++i) {
+            const double t = i / 48000.0;
+            in[2 * size_t(i)] = t > 0.5 && t < 3.0 ? float(0.18 * std::sin(2 * M_PI * 220 * t)) : 0.0f;
+        }
+        Params p; allOff(p); p.set(GateOn, 1); p.set(GateFocus, 0); p.set(GateThreshold, -40); p.set(GateRange, -30);
+        p.set(GateCloseCheck, 0);
+        auto out = run(p, in);
+        double ei = 0, eo = 0;
+        for (int i = 48000; i < 48000 * 3 - 4800; ++i) { ei += double(in[2 * size_t(i)]) * in[2 * size_t(i)]; eo += double(out[size_t(i)]) * out[size_t(i)]; }
+        check(10 * std::log10(ei / eo) < 0.5, "adaptive gate: a long sustained vowel still passes (dB lost)", 10 * std::log10(ei / eo));
+    }
     { // Level analysis (mic test / Setup): speech vs noise floor, clipping, envelope.
         std::vector<float> x(48000 * 4);
         unsigned seed = 1;

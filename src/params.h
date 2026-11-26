@@ -123,6 +123,7 @@ enum ParamId {
     OutputGain,     // dB
     Bypass,         // 1 = only channel select + input gain
     Mute,           // 1 = send silence (fades out/in without clicks); never saved
+    GateAdaptive,   // 1 = raise the gate threshold above steady background noise that gets louder
     PARAM_COUNT
 };
 
@@ -250,6 +251,7 @@ inline constexpr ParamDef kParams[PARAM_COUNT] = {
     {"outputGain",     0,    -24,   24},
     {"bypass",         0,     0,    1},
     {"mute",           0,     0,    1},
+    {"gateAdaptive",   1,     0,    1},
 };
 
 } // namespace mf
@@ -264,6 +266,6 @@ constexpr bool keyIs(int id, const char *k) {
 static_assert(keyIs(InputGain, "inputGain") && keyIs(GateAdded, "gateAdded") && keyIs(GateTiltDir, "gateTiltDir") &&
               keyIs(AutoLevelSpeed, "autoLevelSpeed") && keyIs(CompMakeup, "compMakeup") && keyIs(VcMix, "vcMix") &&
               keyIs(Eq5Q, "eq5Q") && keyIs(ToneAir, "toneAir") && keyIs(PluginsOn, "pluginsOn") && keyIs(ReverbMix, "reverbMix") &&
-              keyIs(Bypass, "bypass") && keyIs(Mute, "mute"),
+              keyIs(Bypass, "bypass") && keyIs(Mute, "mute") && keyIs(GateAdaptive, "gateAdaptive"),
               "kParams rows are out of step with the ParamId enum");
 } // namespace mf

@@ -28,7 +28,10 @@ Rectangle {
         elide: Text.ElideRight
         text: controller.muted ? "Muted"
             : !root.gateActive ? "Voice Gate off"
-            : root.lit ? "● Your voice is passing" : "Gate closed"
+            : root.lit ? "● Your voice is passing"
+            : controller.gateReason === "far" ? "Closed: not close to the mic"
+            : controller.gateReason === "noise" ? "Closed: background noise"
+            : "Gate closed"
         color: root.lit ? Theme.gate : Theme.textFaint
         font.pixelSize: Theme.fsBody
         font.weight: Font.Bold
