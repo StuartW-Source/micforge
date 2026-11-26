@@ -22,6 +22,7 @@
     <file>qml/MetricBar.qml</file>
     <file>qml/DiagnosticsPage.qml</file>
     <file>qml/MicTestPage.qml</file>
+    <file>qml/StageHum.qml</file>
     <file>qml/ChainTile.qml</file>
     <file>qml/ClosenessBar.qml</file>
     <file>qml/EffectLibrary.qml</file>

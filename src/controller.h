@@ -54,6 +54,7 @@ class Controller : public QObject {
     Q_PROPERTY(QString gateReason MEMBER m_gateReason NOTIFY metersChanged)
     Q_PROPERTY(qreal gateFloor MEMBER m_gateFloor NOTIFY metersChanged)     // steady background, dB (-120 = none)
     Q_PROPERTY(qreal gateOpenAt MEMBER m_gateOpenAt NOTIFY metersChanged)   // threshold in use, dB
+    Q_PROPERTY(qreal humBase MEMBER m_humBase NOTIFY metersChanged)         // 50 / 60 Hz, 0 = not found yet
     Q_PROPERTY(qreal compLevel MEMBER m_compLevel NOTIFY metersChanged)
     Q_PROPERTY(qreal compReduction MEMBER m_compReduction NOTIFY metersChanged)
     Q_PROPERTY(qreal deessReduction MEMBER m_deessReduction NOTIFY metersChanged)
@@ -241,7 +242,7 @@ private:
     bool m_gateOpen = false;
     qreal m_gateTilt = -120;
     QString m_gateReason;
-    qreal m_gateFloor = -120, m_gateOpenAt = -120;
+    qreal m_gateFloor = -120, m_gateOpenAt = -120, m_humBase = 0;
     int m_reasonHold = 0, m_reasonCode = 0;
     qreal m_autoLevelGain = 0;
 

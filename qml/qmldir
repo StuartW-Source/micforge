@@ -58,3 +58,4 @@ WaveView 1.0 WaveView.qml
 MetricBar 1.0 MetricBar.qml
 DiagnosticsPage 1.0 DiagnosticsPage.qml
 MicTestPage 1.0 MicTestPage.qml
+StageHum 1.0 StageHum.qml

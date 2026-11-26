@@ -51,7 +51,8 @@ struct Meters {
     // detector), 4 = closed: loud enough but not close enough, 5 = open.
     std::atomic<int> gateReason{0};
     std::atomic<float> gateFloor{-120};    // steady background level the gate measured, dB (-120 = none)
-    std::atomic<float> gateOpenAt{-120};   // threshold in use (raised above the setting by background noise)     // closeness (bass minus treble, dB) of current sound; -120 = silence
+    std::atomic<float> gateOpenAt{-120};
+    std::atomic<float> humBase{0};         // mains frequency Hum Removal is working on (0 = none yet)   // threshold in use (raised above the setting by background noise)     // closeness (bass minus treble, dB) of current sound; -120 = silence
     std::atomic<float> compLevel{-120};    // compressor detector input, dB
     std::atomic<float> compReduction{0};   // dB (positive)
     std::atomic<float> deessReduction{0};  // dB (positive)
@@ -82,7 +83,7 @@ struct Recorder {
 };
 
 struct Biquad {
-    enum Type { LP, HP, Peak, LowShelf, HighShelf };
+    enum Type { LP, HP, Peak, LowShelf, HighShelf, Notch };
     double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
     double z1 = 0, z2 = 0;
 
@@ -113,6 +114,10 @@ struct Biquad {
         case Peak:
             B0 = 1 + al * A; B1 = -2 * cw; B2 = 1 - al * A;
             A0 = 1 + al / A; A1 = -2 * cw; A2 = 1 - al / A;
+            break;
+        case Notch:
+            B0 = 1; B1 = -2 * cw; B2 = 1;
+            A0 = 1 + al; A1 = -2 * cw; A2 = 1 - al;
             break;
         case LowShelf: {
             const double s = 2 * std::sqrt(A) * al;
@@ -230,6 +235,100 @@ struct TruePeakDetector {
             pk = std::max(pk, std::fabs(acc));
         }
         return pk;
+    }
+};
+
+// Removes mains hum: narrow notches (3 Hz wide) on 50 or 60 Hz and its harmonics. In automatic mode it
+// only commits to 50 or 60 Hz when those frequencies are narrow, steady peaks (hum), checked over two
+// consecutive seconds, so a voice's own harmonics (which wander in pitch) can't trigger it.
+struct HumRemover {
+    static constexpr int kMax = 10;
+    SmoothBiquad notch[kMax];
+    float fs = 48000, base = 0;     // 0 = not detected yet (automatic mode): passes audio through
+    int harmonics = 6, mode = 0;    // mode: 0 auto, 1 = 50 Hz, 2 = 60 Hz
+    // Detection: Goertzel at k*f and k*f +- 8 Hz for k = 1..3, f = 50/60, over 1 s blocks.
+    struct G { double c = 0, s1 = 0, s2 = 0; void set(double hz, double fs) { c = 2 * std::cos(2 * M_PI * hz / fs); } inline void push(float x) { const double s0 = x + c * s1 - s2; s2 = s1; s1 = s0; } double power() const { return s1 * s1 + s2 * s2 - c * s1 * s2; } void clear() { s1 = s2 = 0; } };
+    G g[2][3][3]; // [50/60][harmonic][centre, below, above]
+    int count = 0, lastWinner = 0;
+
+    void configure(float sampleRate, int freqMode, int harm, bool jump) {
+        fs = sampleRate; harmonics = std::clamp(harm, 1, kMax); mode = freqMode;
+        for (int b = 0; b < 2; ++b)
+            for (int k = 0; k < 3; ++k) {
+                const double f = (b ? 60.0 : 50.0) * (k + 1);
+                g[b][k][0].set(f, fs); g[b][k][1].set(f - 8, fs); g[b][k][2].set(f + 8, fs);
+            }
+        if (mode == 1) setBase(50, jump);
+        else if (mode == 2) setBase(60, jump);
+    }
+    void setBase(float f, bool jump) {
+        const bool first = base == 0;
+        base = f;
+        for (int k = 0; k < kMax; ++k) {
+            const double hz = f * (k + 1);
+            notch[k].set(Biquad::Notch, fs, hz, hz / 3.0, 0, jump || first);
+        }
+    }
+    void reset() { for (auto &n : notch) n.reset(); for (auto &a : g) for (auto &b : a) for (auto &c : b) c.clear(); count = 0; }
+    void detect(float x) {
+        for (auto &a : g) for (auto &b : a) for (auto &c : b) c.push(x);
+        if (++count < int(fs)) return;
+        count = 0;
+        int winner = 0;
+        double best = 0;
+        for (int b = 0; b < 2; ++b) {
+            int peaky = 0;
+            double e = 0;
+            for (int k = 0; k < 3; ++k) {
+                const double c = g[b][k][0].power(), side = 0.5 * (g[b][k][1].power() + g[b][k][2].power());
+                if (c > 10.0 * side && c > 1e-3) ++peaky; // 10 dB above its neighbours, and audible (about -70 dBFS)
+                e += c;
+            }
+            if (peaky >= 2 && e > best) { best = e; winner = b ? 60 : 50; }
+        }
+        for (auto &a : g) for (auto &b : a) for (auto &c : b) c.clear();
+        if (winner && winner == lastWinner && winner != int(base)) setBase(float(winner), false);
+        lastWinner = winner;
+    }
+    inline float process(float x) {
+        if (mode == 0) detect(x);
+        if (base == 0) return x;
+        for (int k = 0; k < harmonics; ++k) x = notch[k].process(x);
+        return x;
+    }
+};
+
+// Plosive guard: a "p" or "b" close to the mic hits it with a burst of very low frequencies. When the
+// energy below ~120 Hz jumps 6+ dB above the voice band (300 Hz-3 kHz; a real close voice measured at
+// most +1 dB), a low shelf at 200 Hz
+// dips quickly (2 ms) and recovers (80 ms). A bass-heavy voice never has that much more sub-bass than
+// voice-band energy, so it isn't touched.
+struct PlosiveGuard {
+    Biquad lfLp, midHp, midLp, shelf;
+    float lfEnv = 0, midEnv = 0, red = 0, shelfDb = 0, aEnv = 0, rEnv = 0, aRed = 0, rRed = 0, fs = 48000;
+    int tick = 0;
+    void configure(float sampleRate) {
+        fs = sampleRate;
+        lfLp.set(Biquad::LP, fs, 120, 0.7071);
+        midHp.set(Biquad::HP, fs, 300, 0.7071);
+        midLp.set(Biquad::LP, fs, 3000, 0.7071);
+        aEnv = onePole(1.0f, fs); rEnv = onePole(50.0f, fs);
+        aRed = onePole(2.0f, fs); rRed = onePole(80.0f, fs);
+        shelf.set(Biquad::LowShelf, fs, 200, 0.7071, -shelfDb);
+    }
+    void reset() { lfLp.reset(); midHp.reset(); midLp.reset(); shelf.reset(); lfEnv = midEnv = red = shelfDb = 0; }
+    static inline void follow(float &env, float a, float att, float rel) { env = a > env ? att * env + (1 - att) * a : rel * env + (1 - rel) * a; }
+    inline float process(float x) {
+        follow(lfEnv, std::fabs(lfLp.process(x)), aEnv, rEnv);
+        follow(midEnv, std::fabs(midLp.process(midHp.process(x))), aEnv, rEnv);
+        const float ratio = linToDb(lfEnv) - linToDb(midEnv);
+        const float want = linToDb(lfEnv) > -35.0f ? std::clamp((ratio - 6.0f) * 4.0f, 0.0f, 24.0f) : 0.0f;
+        red = want > red ? want + (red - want) * aRed : want + (red - want) * rRed;
+        if ((++tick & 15) == 0 && std::fabs(red - shelfDb) > 0.1f) {
+            shelfDb = red;
+            shelf.set(Biquad::LowShelf, fs, 200, 0.7071, -shelfDb);
+        }
+        return shelfDb > 0.05f ? shelf.process(x) : x;
     }
 };
 
@@ -429,7 +528,8 @@ private:
 
     // A stage that is about to fade in starts from a clean state (no stale filter memory or tails).
     void resetStartingStages() {
-        if (fLowCut.starting()) for (auto &b : lowCut) b.reset();
+        if (fLowCut.starting()) { for (auto &b : lowCut) b.reset(); plosive.reset(); }
+        if (fHum.starting()) hum.reset();
         if (fGate.starting()) resetGate();
         if (fAl.starting()) al.reset();
         if (fComp.starting()) compGrDb = 0;
@@ -497,10 +597,14 @@ private:
                 x = fNoise.apply(x, y);
             }
 
-            // 3. Low cut (removes rumble, desk thumps, plosive boom).
+            // 2b. Hum removal (mains hum and its harmonics).
+            if (fHum.running()) x = fHum.apply(x, hum.process(x));
+
+            // 3. Low cut (removes rumble, desk thumps), plus the plosive guard ("p"/"b" pops).
             if (fLowCut.running()) {
                 float y = lowCut[0].process(x);
                 if (lowCutSteep) y = lowCut[1].process(y);
+                if (plosiveOn) y = plosive.process(y);
                 x = fLowCut.apply(x, y);
             }
 
@@ -702,6 +806,7 @@ private:
         if (fDeess.on) Meters::bump(m.deessReduction, deRedMax);
         if (fLim.on) Meters::bump(m.limReduction, limRed);
         m.autoLevelGain.store(fAl.on ? al.gainDb : 0.0f, std::memory_order_relaxed);
+        m.humBase.store(fHum.on ? hum.base : 0.0f, std::memory_order_relaxed);
     }
 
     void update(const Params &p) {
@@ -717,6 +822,10 @@ private:
         fNoise.set(active(NoiseAdded, NoiseOn), jump, fs);
         noiseMixS.configure(fs); noiseMixS.set(p.get(NoiseAmount) / 100.0f, jump);
 
+        fHum.set(active(HumAdded, HumOn), jump, fs);
+        hum.configure(fs, int(p.get(HumFreq) + 0.5f), int(p.get(HumHarmonics) + 0.5f), jump);
+        plosiveOn = p.get(LowCutPlosive) > 0.5f;
+        if (jump) plosive.configure(fs);
         fLowCut.set(active(LowCutAdded, LowCutOn), jump, fs);
         lowCutSteep = p.get(LowCutSteep) > 0.5f;
         if (lowCutSteep) { // 4th-order Butterworth = two stages
@@ -820,7 +929,7 @@ private:
 
     static constexpr int kMaxBlock = 1024;
     std::array<float, kMaxBlock> raw{}; // input after channel + gain (for the bypass crossfade)
-    StageFade fBypass, fNoise, fLowCut, fGate, fAl, fComp, fDeess, fVc, fEq, fTone, fWarm, fEx, fDbl, fEcho, fRev, fLim;
+    StageFade fBypass, fNoise, fHum, fLowCut, fGate, fAl, fComp, fDeess, fVc, fEq, fTone, fWarm, fEx, fDbl, fEcho, fRev, fLim;
 
     int channel = 0;
     Smoothed inGainS;
@@ -833,6 +942,9 @@ private:
     std::array<float, kNoiseFrame> nIn{}, nOut{}, nDry{};
     int nPos = 0;
 
+    HumRemover hum;
+    PlosiveGuard plosive;
+    bool plosiveOn = true;
     bool lowCutSteep = true;
     SmoothBiquad lowCut[2];
 

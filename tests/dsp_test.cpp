@@ -113,6 +113,15 @@ static std::vector<float> synthVoice(int n, float peak) {
     return v;
 }
 
+// Amplitude of one frequency (Goertzel), in dB relative to full-scale sine.
+static double toneLevelDb(const std::vector<float> &y, int from, int to, double hz) {
+    const double w = 2 * M_PI * hz / 48000, c = 2 * std::cos(w);
+    double s1 = 0, s2 = 0;
+    for (int i = from; i < to; ++i) { const double s0 = y[size_t(i)] + c * s1 - s2; s2 = s1; s1 = s0; }
+    const double mag = std::sqrt(std::max(0.0, s1 * s1 + s2 * s2 - c * s1 * s2)) * 2 / (to - from);
+    return 20 * std::log10(mag + 1e-12);
+}
+
 static void allOff(Params &p) {
     p.set(InputGain, 0); p.set(LowCutOn, 0); p.set(GateOn, 0); p.set(CompOn, 0);
     p.set(ToneOn, 0); p.set(LimiterOn, 0); p.set(OutputGain, 0);
@@ -586,6 +595,64 @@ int main() {
         check(lossDb(on, true) < 1.5 && lossDb(strict, true) < 1.5, "voice detector: speech still passes (dB lost, worst)", std::max(lossDb(on, true), lossDb(strict, true)));
     } else {
         std::printf("[SKIP] voice detector tests (rnnoise not installed)\n");
+    }
+    // ---- Phase 4: hum removal (mains hum at 50/60 Hz and its harmonics).
+    for (int mains : {50, 60}) {
+        const int L = 48000 * 5;   // detection needs 2 s; measure the steady state from 3 s
+        auto voice = synthVoice(L, 0.3f);
+        std::vector<float> humOnly(static_cast<size_t>(L) * 2), withHum(static_cast<size_t>(L) * 2), voiceOnly(static_cast<size_t>(L) * 2);
+        for (int i = 0; i < L; ++i) {
+            double h = 0;
+            for (int k = 1; k <= 6; ++k) h += 0.03 / k * std::sin(2 * M_PI * mains * k * i / 48000.0 + k);
+            humOnly[2 * size_t(i)] = float(h);
+            withHum[2 * size_t(i)] = voice[size_t(i)] + float(h);
+            voiceOnly[2 * size_t(i)] = voice[size_t(i)];
+        }
+        Params lowCutOnly; allOff(lowCutOnly); lowCutOnly.set(LowCutOn, 1);       // the best the chain could do before
+        Params hum; allOff(hum); hum.set(LowCutOn, 1); hum.set(HumAdded, 1); hum.set(HumOn, 1); hum.set(HumFreq, 0); // automatic
+        auto worstHarmonic = [&](const std::vector<float> &y) {
+            double w = -200;
+            for (int k = 2; k <= 6; ++k) w = std::max(w, toneLevelDb(y, 3 * 48000, L, mains * k)); // what Low Cut can't reach
+            return w;
+        };
+        const double before = worstHarmonic(run(lowCutOnly, humOnly)), after = worstHarmonic(run(hum, humOnly));
+        char name[112];
+        std::snprintf(name, sizeof name, "hum %d Hz: worst harmonic, Low Cut only %.0f dB -> with Hum Removal", mains, before);
+        check(after < before - 25, name, after);
+        // Detection still works while someone talks: the hum part of the output shrinks just as much.
+        const double withVoiceBefore = worstHarmonic(run(lowCutOnly, withHum)), withVoiceAfter = worstHarmonic(run(hum, withHum));
+        std::snprintf(name, sizeof name, "hum %d Hz: found and removed while talking (dB lower)", mains);
+        check(withVoiceBefore - withVoiceAfter > 15, name, withVoiceBefore - withVoiceAfter);
+        auto vBefore = run(lowCutOnly, voiceOnly), vAfter = run(hum, voiceOnly);
+        std::snprintf(name, sizeof name, "hum %d Hz: voice level change (dB)", mains);
+        check(std::fabs(rmsDb(vAfter, 48000, L) - rmsDb(vBefore, 48000, L)) < 0.5, name, rmsDb(vAfter, 48000, L) - rmsDb(vBefore, 48000, L));
+    }
+    // ---- Phase 4: plosive guard ("p"/"b" pops).
+    {
+        const int L = 48000 * 4;
+        auto voice = synthVoice(L, 0.3f);
+        std::vector<float> popped(static_cast<size_t>(L) * 2), bassy(static_cast<size_t>(L) * 2);
+        Biquad prox; prox.set(Biquad::LowShelf, 48000, 250, 0.7, 12); // a very close, bass-heavy voice
+        for (int i = 0; i < L; ++i) {
+            const double t = std::fmod(i / 48000.0, 1.0);           // one pop per second, 40 ms long
+            const double pop = t < 0.04 ? 0.8 * std::sin(M_PI * t / 0.04) * std::sin(2 * M_PI * 55 * t) : 0.0;
+            popped[2 * size_t(i)] = voice[size_t(i)] + float(pop);
+            bassy[2 * size_t(i)] = 0.9f * prox.process(voice[size_t(i)]); // loud enough to reach the guard's detector
+        }
+        auto lowPeakInPops = [&](const std::vector<float> &y) {
+            Biquad lp1, lp2; lp1.set(Biquad::LP, 48000, 150, 0.7071); lp2.set(Biquad::LP, 48000, 150, 0.7071);
+            float pk = 0;
+            for (int i = 0; i < L; ++i) { const float v = lp2.process(lp1.process(y[size_t(i)])); if (i > 48000 && std::fmod(i / 48000.0, 1.0) < 0.06) pk = std::max(pk, std::fabs(v)); }
+            return linToDb(pk);
+        };
+        Params off; allOff(off); off.set(LowCutOn, 1); off.set(LowCutPlosive, 0);  // previous behaviour
+        Params on; allOff(on); on.set(LowCutOn, 1); on.set(LowCutPlosive, 1);
+        const double b = lowPeakInPops(run(off, popped)), a = lowPeakInPops(run(on, popped));
+        char name[96];
+        std::snprintf(name, sizeof name, "plosive guard: pop bass peak, Low Cut only %.1f dB -> guarded", b);
+        check(a < b - 8, name, a);
+        auto vOff = run(off, bassy), vOn = run(on, bassy);
+        check(std::fabs(rmsDb(vOn, 48000, L) - rmsDb(vOff, 48000, L)) < 0.3, "plosive guard: bass-heavy close voice untouched (dB)", rmsDb(vOn, 48000, L) - rmsDb(vOff, 48000, L));
     }
     { // A sustained vowel ("aaah", 2.5 s, perfectly steady) is not mistaken for background noise.
         const int L = 48000 * 4;

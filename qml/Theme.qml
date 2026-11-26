@@ -39,6 +39,7 @@ QtObject {
     readonly property color danger:    pick("#ff5c5c", "#cc2f2f")
     readonly property color warn:      pick("#ffd24d", "#9a6d00")
     readonly property color noise:     pick("#7ee0c3", "#128a72")
+    readonly property color hum:       pick("#9fd8ff", "#2a6fa3")
     readonly property color autolevel: pick("#8fd16a", "#46861f")
     readonly property color deess:     pick("#c9a0ff", "#8048d8")
     readonly property color voice:     pick("#ff9f43", "#bd6110")

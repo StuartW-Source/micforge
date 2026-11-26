@@ -408,6 +408,7 @@ void Controller::pollMeters() {
         m_gateReason = QString::fromLatin1(names[std::clamp(m_reasonCode, 0, 5)]);
         m_gateFloor = m.gateFloor.load();
         m_gateOpenAt = m.gateOpenAt.load();
+        m_humBase = m.humBase.load();
     }
     m_deessReduction = m.deessReduction.exchange(0);
     m_outPeak = m.outPeak.exchange(-120);
