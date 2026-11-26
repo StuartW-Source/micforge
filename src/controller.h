@@ -56,6 +56,7 @@ class Controller : public QObject {
     Q_PROPERTY(QString appStateText READ appStateText NOTIFY statusChanged)
     Q_PROPERTY(bool muted READ muted WRITE setMuted NOTIFY statusChanged)
     Q_PROPERTY(QString backendName READ backendName CONSTANT)
+    Q_PROPERTY(QString virtualMicName READ virtualMicName CONSTANT)
     Q_PROPERTY(bool safeMode READ safeMode CONSTANT)
     Q_PROPERTY(QString safeModeReason READ safeModeReason CONSTANT)
     Q_PROPERTY(QString damagedSettingsCopy READ damagedSettingsCopy CONSTANT)
@@ -95,6 +96,7 @@ public:
 
     bool engineOk() const { return m_backend->connected(); }
     QString backendName() const { return QString::fromStdString(m_backend->name()); }
+    QString virtualMicName() const { return QString::fromStdString(m_startup.backend.virtualMicDescription); }
     QString engineState() const;
     QString appState() const;
     QString appStateText() const;

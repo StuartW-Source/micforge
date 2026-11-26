@@ -1,14 +1,21 @@
 import QtQuick
 
-// Segmented choice (e.g. Left / Right / Both) bound to an integer parameter.
+// Segmented choice (e.g. Left / Right / Both) bound to an integer parameter, or, with no
+// paramKey, to `selectedIndex` (listen to `chosen`).
 Rectangle {
     id: root
     property string paramKey: ""
     property var options: []
     property color accent: Theme.input
-    readonly property int current: Math.round(controller.params[paramKey])
+    property int selectedIndex: 0
+    signal chosen(int index)
+    readonly property int current: paramKey !== "" ? Math.round(controller.params[paramKey]) : selectedIndex
 
-    function choose(i) { if (enabled && i >= 0 && i < options.length) controller.setParam(paramKey, i) }
+    function choose(i) {
+        if (!enabled || i < 0 || i >= options.length) return
+        if (paramKey !== "") controller.setParam(paramKey, i)
+        chosen(i)
+    }
 
     activeFocusOnTab: true
     Accessible.role: Accessible.PageTabList

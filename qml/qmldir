@@ -14,7 +14,6 @@ PresetChips 1.0 PresetChips.qml
 ReductionMeter 1.0 ReductionMeter.qml
 ResponseCurve 1.0 ResponseCurve.qml
 Segmented 1.0 Segmented.qml
-SettingsDialog 1.0 SettingsDialog.qml
 StageAutoLevel 1.0 StageAutoLevel.qml
 StageComp 1.0 StageComp.qml
 StageDeess 1.0 StageDeess.qml
@@ -43,3 +42,15 @@ MfTextField 1.0 MfTextField.qml
 MfMenu 1.0 MfMenu.qml
 MfMenuItem 1.0 MfMenuItem.qml
 MfMenuSeparator 1.0 MfMenuSeparator.qml
+Card 1.0 Card.qml
+InfoRow 1.0 InfoRow.qml
+NavItem 1.0 NavItem.qml
+SettingRow 1.0 SettingRow.qml
+SectionLabel 1.0 SectionLabel.qml
+GateLight 1.0 GateLight.qml
+OverviewPage 1.0 OverviewPage.qml
+EffectsPage 1.0 EffectsPage.qml
+IsolationPage 1.0 IsolationPage.qml
+DevicesPage 1.0 DevicesPage.qml
+PresetsPage 1.0 PresetsPage.qml
+SettingsPage 1.0 SettingsPage.qml

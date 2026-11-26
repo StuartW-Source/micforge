@@ -55,14 +55,28 @@ Item {
         }
     }
     Text { anchors { left: parent.left; top: bar.bottom; topMargin: 5 } text: "← far away"; color: Theme.textFaint; font.pixelSize: 10 }
+    // Label centres for "others" and "you", pushed apart when the two marks are close together.
+    function clampX(x, w) { return Math.max(60, Math.min(bar.width - w - 60, x)) }
+    readonly property var labelX: {
+        var co = xOf(othersMark), cy = xOf(youMark), wo = othersLabel.width, wy = youLabel.width
+        var need = (wo + wy) / 2 + 6
+        if (hasOthersMark && hasMarks && Math.abs(co - cy) < need) {
+            var mid = (co + cy) / 2, dir = co <= cy ? -1 : 1
+            co = mid + dir * need / 2
+            cy = mid - dir * need / 2
+        }
+        return { others: clampX(co - wo / 2, wo), you: clampX(cy - wy / 2, wy) }
+    }
     Text {
+        id: othersLabel
         visible: root.hasOthersMark
-        x: Math.max(60, Math.min(bar.width - width - 60, root.xOf(root.othersMark) - width / 2)); anchors { top: bar.bottom; topMargin: 5 }
+        x: root.labelX.others; anchors { top: bar.bottom; topMargin: 5 }
         text: "others"; color: Theme.tone; font.pixelSize: 10; font.bold: true
     }
     Text {
+        id: youLabel
         visible: root.hasMarks
-        x: Math.max(60, Math.min(bar.width - width - 60, root.xOf(root.youMark) - width / 2)); anchors { top: bar.bottom; topMargin: 5 }
+        x: root.labelX.you; anchors { top: bar.bottom; topMargin: 5 }
         text: "you"; color: Theme.gate; font.pixelSize: 10; font.bold: true
     }
     Text { anchors { right: parent.right; top: bar.bottom; topMargin: 5 } text: "close up →"; color: Theme.textFaint; font.pixelSize: 10 }

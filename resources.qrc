@@ -6,6 +6,18 @@
     <file>qml/MfMenu.qml</file>
     <file>qml/MfMenuItem.qml</file>
     <file>qml/MfMenuSeparator.qml</file>
+    <file>qml/Card.qml</file>
+    <file>qml/InfoRow.qml</file>
+    <file>qml/NavItem.qml</file>
+    <file>qml/SettingRow.qml</file>
+    <file>qml/SectionLabel.qml</file>
+    <file>qml/GateLight.qml</file>
+    <file>qml/OverviewPage.qml</file>
+    <file>qml/EffectsPage.qml</file>
+    <file>qml/IsolationPage.qml</file>
+    <file>qml/DevicesPage.qml</file>
+    <file>qml/PresetsPage.qml</file>
+    <file>qml/SettingsPage.qml</file>
     <file>qml/ChainTile.qml</file>
     <file>qml/ClosenessBar.qml</file>
     <file>qml/EffectLibrary.qml</file>
@@ -23,7 +35,6 @@
     <file>qml/ReductionMeter.qml</file>
     <file>qml/ResponseCurve.qml</file>
     <file>qml/Segmented.qml</file>
-    <file>qml/SettingsDialog.qml</file>
     <file>qml/StageAutoLevel.qml</file>
     <file>qml/StageComp.qml</file>
     <file>qml/StageDeess.qml</file>

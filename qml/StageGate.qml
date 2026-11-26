@@ -52,7 +52,7 @@ StagePanel {
         spacing: 14
         Rectangle {
             id: gateLight
-            Layout.preferredWidth: 170
+            Layout.preferredWidth: root.width < 900 ? 130 : 170
             implicitHeight: 64
             radius: 12
             property bool open: controller.gateOpen && root.active
@@ -135,7 +135,7 @@ StagePanel {
 
         Rectangle {
             id: margin
-            Layout.preferredWidth: 260
+            Layout.preferredWidth: root.width < 900 ? 200 : 260
             Layout.fillHeight: true
             implicitHeight: 110
             radius: 12
@@ -156,6 +156,8 @@ StagePanel {
                 Text {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
+                    maximumLineCount: 3
+                    elide: Text.ElideRight
                     color: Theme.textFaint; font.pixelSize: 11
                     text: !margin.known ? "Use “Learn other voices” while someone is talking nearby to measure this."
                         : root.p.gateCloseCheck > 0.5 ? "How much louder other voices can get on volume alone. The closeness check blocks them beyond that."
