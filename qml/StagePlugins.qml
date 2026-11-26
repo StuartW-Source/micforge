@@ -99,6 +99,13 @@ StagePanel {
                                 color: Theme.textFaint; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true
                             }
                         }
+                        PillButton {
+                            visible: modelData.loaded && modelData.hasEditor
+                            text: "Open window"
+                            implicitHeight: 26
+                            onClicked: root.pm.showEditor(index, true)
+                            Accessible.name: "Open " + modelData.name + "'s own window"
+                        }
                         PillButton { text: "▲"; implicitHeight: 26; enabled: index > 0; onClicked: root.pm.move(index, -1) }
                         PillButton { text: "▼"; implicitHeight: 26; enabled: index < root.pm.chain.length - 1; onClicked: root.pm.move(index, 1) }
                         PillButton {
@@ -114,6 +121,31 @@ StagePanel {
                             onToggled: (on) => root.pm.setBypass(index, !on)
                         }
                         PillButton { text: "Remove"; implicitHeight: 26; onClicked: { root.expanded = ({}); root.pm.remove(index) } }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+                        ToggleSwitch {
+                            checked: modelData.separate
+                            accent: Theme.plugins
+                            label: "Run separately"
+                            implicitWidth: 34; implicitHeight: 19
+                            onToggled: (on) => root.pm.setSeparate(index, on)
+                        }
+                        Text {
+                            text: modelData.separate ? "Runs separately: if it crashes, your voice keeps going and it restarts." + (modelData.missed > 0 ? "  Late " + modelData.missed + "×." : "")
+                                                     : "Runs inside MicForge" + (modelData.format === "VST3" ? " (run separately to open its own window)." : ".")
+                            color: Theme.textFaint; font.pixelSize: Theme.fsSmall
+                            Layout.fillWidth: true; elide: Text.ElideRight
+                        }
+                        HelpButton { text: "Running separately puts the plugin in its own small process. If it crashes or freezes, MicForge and your processed mic keep working: your voice passes through unprocessed for a moment while the plugin restarts. It costs a few microseconds per block. VST3 plugins can then also open their own window." }
+                    }
+                    Text {
+                        visible: (modelData.notice || "") !== ""
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: modelData.notice || ""
+                        color: Theme.warn; font.pixelSize: Theme.fsSmall
                     }
                     RowLayout {
                         visible: modelData.error !== ""

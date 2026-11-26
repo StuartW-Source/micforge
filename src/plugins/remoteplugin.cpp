@@ -7,6 +7,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSocketNotifier>
+#include <QTimer>
+#include <QWindow>
 
 #include <cstdio>
 #include <pthread.h>
@@ -149,6 +151,8 @@ void RemotePlugin::handle(const QByteArray &l) {
             values[size_t(i)].store(float(a.at(1).toDouble()), std::memory_order_relaxed);
             if (onValueFromPlugin) onValueFromPlugin(i, float(a.at(1).toDouble()));
         }
+    } else if (o.contains("editorClosed")) {
+        if (onEditorClosed) onEditorClosed();
     } else if (o.contains("latency")) {
         latency = o["latency"].toInt();
     }
@@ -189,7 +193,17 @@ int runPluginHost(int argc, char **argv) {
 
     QJsonArray ps;
     for (int i = 0; i < inst->paramCount(); ++i) ps << paramToJson(inst->param(i));
-    say({{"ready", QJsonObject{{"params", ps}, {"latency", inst->latency}, {"editor", false}}}});
+    say({{"ready", QJsonObject{{"params", ps}, {"latency", inst->latency},
+                                {"editor", QGuiApplication::platformName() == "xcb" && inst->hasEditor()}}}});
+    // Settings changed in the plugin's own window go back to MicForge.
+    inst->onEditorChange = [&](int i, float v) { say({{"value", QJsonArray{i, double(v)}}}); };
+    std::unique_ptr<QWindow> editorWindow;
+    auto closeEditor = [&] {
+        if (!editorWindow) return;
+        inst->closeEditor();
+        editorWindow.reset();
+        say({{"editorClosed", true}});
+    };
 
     // Audio loop on its own thread; ask for real-time priority (works if the user may, harmless if not).
     bridge::Shared &s = *seg.get();
@@ -218,12 +232,31 @@ int runPluginHost(int argc, char **argv) {
             if (o.contains("set")) {
                 const QJsonArray a = o["set"].toArray();
                 inst->setValue(a.at(0).toInt(), float(a.at(1).toDouble()));
+            } else if (o.contains("editor")) {
+                if (o["editor"].toBool() && !editorWindow) {
+                    editorWindow = std::make_unique<QWindow>();
+                    editorWindow->setTitle(info.name.isEmpty() ? QStringLiteral("Plugin") : info.name + QStringLiteral(" — MicForge"));
+                    editorWindow->resize(400, 300);
+                    editorWindow->create();
+                    QWindow *w = editorWindow.get();
+                    if (!inst->openEditor(uintptr_t(w->winId()), [w](int width, int height) { w->resize(width, height); })) {
+                        editorWindow.reset();
+                        say({{"editorClosed", true}});
+                    } else {
+                        w->show();
+                        // The user closing the window just hides it: detach the plugin's view.
+                        QObject::connect(w, &QWindow::visibleChanged, &app, [&](bool shown) { if (!shown) QTimer::singleShot(0, &app, closeEditor); });
+                    }
+                } else if (!o["editor"].toBool()) {
+                    closeEditor();
+                }
             } else if (o.contains("quit")) {
                 app.quit();
             }
         }
     });
     const int rc = app.exec();
+    closeEditor();
     s.quit = 1;
     bridge::wake(s.state);
     audio.join();

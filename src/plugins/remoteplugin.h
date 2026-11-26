@@ -32,6 +32,7 @@ public:
 
     std::function<void(const QString &why)> onCrashed;       // UI thread
     std::function<void(int index, float value)> onValueFromPlugin; // a change made in the plugin's window
+    std::function<void()> onEditorClosed;
 
 protected:
     void onValueSet(int i, float v) override;

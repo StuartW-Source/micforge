@@ -15,6 +15,8 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -80,6 +82,14 @@ public:
 
     PluginInfo info;
     std::atomic<bool> bypass{false};
+
+    // The plugin's own window (VST3 on X11 so far). Only used inside a --plugin-host helper process.
+    virtual bool hasEditor() { return false; }
+    // Embed the editor into the native window `parent`; `resize(w, h)` asks for a new size (pixels).
+    virtual bool openEditor(uintptr_t /*parent*/, std::function<void(int, int)> /*resize*/) { return false; }
+    virtual void closeEditor() {}
+    // Called (UI thread) when the user changes a setting in the plugin's own window.
+    std::function<void(int index, float value)> onEditorChange;
 protected:
     virtual void onValueSet(int, float) {} // e.g. keep a VST3 edit controller in sync
 public:
