@@ -164,6 +164,11 @@ if(MICFORGE_BUILD_TESTS)
         PkgConfig::PIPEWIRE vst3host Threads::Threads ${CMAKE_DL_LIBS})
     add_test(NAME controller COMMAND controller_test)
 
+    add_executable(bridge_test tests/bridge_test.cpp src/plugins/bridge.cpp)
+    target_include_directories(bridge_test PRIVATE src)
+    target_link_libraries(bridge_test PRIVATE rt)
+    add_test(NAME bridge COMMAND bridge_test)
+
     add_executable(autostart_test tests/autostart_test.cpp src/platform/autostart_xdg.cpp)
     target_include_directories(autostart_test PRIVATE src)
     target_link_libraries(autostart_test PRIVATE Qt6::Core)
