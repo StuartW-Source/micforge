@@ -21,6 +21,16 @@ All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); ve
 - The login entry is no longer re-pointed at development builds.
 
 ### Added
+- **No more clicks** when you move a slider, switch an effect on or off, or use Compare: every change glides.
+- **True-peak limiter:** the output never goes over the ceiling, even between samples.
+- **Voice Gate** explains itself ("closed: background noise", "closed: not close enough"…), and ignores
+  steady background noise (fans, air conditioning) that gets louder than its threshold.
+- **Only open for speech** (optional): the gate also asks the AI voice detector, so typing and clicks stay out.
+- **Hum Removal** effect: removes 50/60 Hz electrical buzz and its overtones; finds the frequency itself.
+- **Tame "p" and "b" pops** (Low Cut, on by default).
+- **Reduce breaths** (experimental, off by default).
+- Voice Isolation shows **what the gate hears**: a live spectrum with its listening band and your Setup
+  voices.
 - **Diagnostics** page: problems in plain English, audio engine and devices, sample rate, block size,
   latency, processing load, glitch counters (late audio, dropouts, clipping), plugin errors and the log.
   **Copy or save a report** to share when asking for help: it never contains audio, and your home folder,

@@ -47,6 +47,10 @@ whether a USB mic, headset, or one channel of a multi-input audio interface.
   - **Loudness margin:** how much louder than normal other voices can get before they'd open the
     gate on volume alone.
 - R1.6 A softer **expander** mode turns quiet sounds down gradually instead of muting them.
+- R1.7 The gate says **why** it's open or closed, and shows what it hears (spectrum, listening band).
+- R1.8 Steady background noise that gets louder than the threshold doesn't hold the gate open; speech,
+  including long vowels, is never mistaken for background.
+- R1.9 Optionally, the gate only opens for speech (AI voice detector), keeping typing and clicks out.
 
 ## R2. Guided setup
 
@@ -107,6 +111,10 @@ whether a USB mic, headset, or one channel of a multi-input audio interface.
   Input → Noise removal → Low cut → Voice gate → Auto level → Compressor → De-esser →
   Voice changer → Equaliser → Tone → Plugins → Warmth → Exciter → Doubler → Echo → Reverb →
   Output (safety limiter).
+
+- R3.x Every setting change and every effect switched on or off is click-free. The limiter holds the
+  ceiling between samples (true peak). Hum Removal, a plosive guard and (experimental) breath reduction
+  are available.
 
 ## R4. Usability
 
