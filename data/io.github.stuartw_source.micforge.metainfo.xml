@@ -30,6 +30,11 @@
   </categories>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.0" date="2026-11-26">
+      <description>
+        <p>New layout with Overview, Voice Isolation, Effects, Audio Devices, Mic Test, Presets, Diagnostics and Settings pages; light and dark themes; mute and push-to-talk; a diagnostics report that leaves out personal details; a mic test; per-microphone Setup; click-free settings, a true-peak limiter, an adaptive Voice Gate, hum removal and a plosive guard; shareable presets with undo/redo; and plugins that can run in their own process, with VST3 plugin windows.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-11-25">
       <description>
         <p>First release.</p>

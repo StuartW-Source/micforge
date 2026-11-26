@@ -2,7 +2,7 @@
 
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
-## [Unreleased]
+## [0.2.0] - 2026-11-26
 
 ### Fixed
 - MicForge failed to start (at login and from the menu) when the optional **rnnoise** or **lilv** library
