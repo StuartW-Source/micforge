@@ -6,6 +6,7 @@ Canvas {
     id: root
     implicitHeight: 170
     onWidthChanged: requestPaint()
+    Connections { target: Theme; function onDarkChanged() { requestPaint() } }
     onHeightChanged: requestPaint()
 
     onPaint: {
@@ -24,45 +25,45 @@ Canvas {
             if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y)
         }
         ctx.closePath()
-        ctx.fillStyle = Qt.rgba(0.25, 0.86, 0.6, 0.14)
+        ctx.fillStyle = Theme.alpha(Theme.gate, 0.14)
         ctx.fill()
-        ctx.strokeStyle = Qt.rgba(0.25, 0.86, 0.6, 0.7)
+        ctx.strokeStyle = Theme.alpha(Theme.gate, 0.7)
         ctx.setLineDash([4, 4])
         ctx.lineWidth = 1.5
         ctx.stroke()
         ctx.setLineDash([])
 
         // Microphone: grille on the left, body + cable to the right.
-        ctx.fillStyle = "#c7ccd6"
+        ctx.fillStyle = Theme.micGrille
         ctx.beginPath(); ctx.arc(micX - 2, cy, 9, 0, 2 * Math.PI); ctx.fill()
-        ctx.fillStyle = "#8a90a0"
+        ctx.fillStyle = Theme.micBody
         ctx.fillRect(micX + 4, cy - 6, 44, 12)
-        ctx.strokeStyle = "#6b7385"; ctx.lineWidth = 2
+        ctx.strokeStyle = Theme.textFaint; ctx.lineWidth = 2
         ctx.beginPath(); ctx.moveTo(micX + 48, cy); ctx.bezierCurveTo(micX + 70, cy, micX + 70, cy + 30, micX + 90, cy + 34); ctx.stroke()
 
         // You.
-        ctx.fillStyle = "#3fdc98"
+        ctx.fillStyle = Theme.gate
         ctx.beginPath(); ctx.arc(youX, cy, 20, 0, 2 * Math.PI); ctx.fill()
-        ctx.fillStyle = "#10131a"; ctx.font = "bold 12px sans-serif"; ctx.textAlign = "center"
+        ctx.fillStyle = Theme.onAccent; ctx.font = "bold 12px sans-serif"; ctx.textAlign = "center"
         ctx.fillText("YOU", youX, cy + 4)
 
         // Other people.
-        ctx.fillStyle = "#ff7aa8"
+        ctx.fillStyle = Theme.tone
         ctx.beginPath(); ctx.arc(othersX, cy, 20, 0, 2 * Math.PI); ctx.fill()
-        ctx.fillStyle = "#10131a"
+        ctx.fillStyle = Theme.onAccent
         ctx.font = "bold 10px sans-serif"
         ctx.fillText("OTHERS", othersX, cy + 4)
 
         // Labels.
-        ctx.fillStyle = "#9aa2b3"; ctx.font = "11px sans-serif"
+        ctx.fillStyle = Theme.textDim; ctx.font = "11px sans-serif"
         ctx.fillText("2–5 cm", (youX + micX) / 2, cy - 26)
-        ctx.strokeStyle = "#9aa2b3"; ctx.lineWidth = 1
+        ctx.strokeStyle = Theme.textDim; ctx.lineWidth = 1
         ctx.beginPath(); ctx.moveTo(youX + 24, cy - 18); ctx.lineTo(micX - 14, cy - 18); ctx.stroke()
-        ctx.fillStyle = "#ff7aa8"
+        ctx.fillStyle = Theme.tone
         ctx.fillText("back of mic = deaf spot", (micX + othersX) / 2 + 20, cy - 30)
-        ctx.strokeStyle = "#ff7aa8"
+        ctx.strokeStyle = Theme.tone
         ctx.beginPath(); ctx.moveTo(micX + 50, cy - 18); ctx.lineTo(othersX - 26, cy - 18); ctx.stroke()
-        ctx.fillStyle = "#3fdc98"
+        ctx.fillStyle = Theme.gate
         ctx.fillText("picks up here", micX - R * 0.55, cy + R * 0.48)
     }
 }

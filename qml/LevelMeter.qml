@@ -68,7 +68,7 @@ Item {
             top: parent.top; bottom: labelText.top; bottomMargin: 6
         }
         radius: 5
-        color: "#0e1015"
+        color: Theme.well
         border.color: Theme.border
         clip: true
 

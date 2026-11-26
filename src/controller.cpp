@@ -84,6 +84,8 @@ Controller::Controller(const StartupInfo &startup, QObject *parent)
     m_currentPreset = s.value("preset", builtinPresets().first().name).toString();
     if (m_currentPreset == QStringLiteral("SM57 · Voice chat")) m_currentPreset = builtinPresets().first().name;
     m_showWelcome = s.value("showWelcome", true).toBool();
+    m_themeMode = s.value("ui/theme", "system").toString();
+    if (m_themeMode != "dark" && m_themeMode != "light") m_themeMode = "system";
 
     connect(&m_params, &QQmlPropertyMap::valueChanged, this, &Controller::onParamEdited);
 
@@ -233,6 +235,7 @@ void Controller::saveNow() {
     s.setValue("source", m_currentSource);
     s.setValue("preset", m_currentPreset);
     s.setValue("showWelcome", m_showWelcome);
+    s.setValue("ui/theme", m_themeMode);
 }
 
 // ---------------------------------------------------------------- devices
@@ -293,6 +296,14 @@ void Controller::setShowWelcome(bool on) {
     m_showWelcome = on;
     m_saveTimer.start();
     emit showWelcomeChanged();
+}
+
+void Controller::setThemeMode(const QString &mode) {
+    const QString m = (mode == "dark" || mode == "light") ? mode : QStringLiteral("system");
+    if (m == m_themeMode) return;
+    m_themeMode = m;
+    m_saveTimer.start();
+    emit themeModeChanged();
 }
 
 // ---------------------------------------------------------------- meters

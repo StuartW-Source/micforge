@@ -1,5 +1,11 @@
 <RCC>
   <qresource prefix="/">
+    <file>qml/FocusRing.qml</file>
+    <file>qml/MfComboBox.qml</file>
+    <file>qml/MfTextField.qml</file>
+    <file>qml/MfMenu.qml</file>
+    <file>qml/MfMenuItem.qml</file>
+    <file>qml/MfMenuSeparator.qml</file>
     <file>qml/ChainTile.qml</file>
     <file>qml/ClosenessBar.qml</file>
     <file>qml/EffectLibrary.qml</file>

@@ -70,6 +70,7 @@ class Controller : public QObject {
     Q_PROPERTY(bool autostartHidden READ autostartHidden WRITE setAutostartHidden NOTIFY autostartChanged)
     Q_PROPERTY(QString version READ version CONSTANT)
     Q_PROPERTY(bool showWelcome READ showWelcome WRITE setShowWelcome NOTIFY showWelcomeChanged)
+    Q_PROPERTY(QString themeMode READ themeMode WRITE setThemeMode NOTIFY themeModeChanged) // "system" | "dark" | "light"
 
     Q_PROPERTY(QStringList presetNames READ presetNames NOTIFY presetsChanged)
     Q_PROPERTY(QString currentPreset READ currentPreset NOTIFY presetsChanged)
@@ -122,6 +123,8 @@ public:
     QString version() const { return QStringLiteral(MICFORGE_VERSION); }
     bool showWelcome() const { return m_showWelcome; }
     void setShowWelcome(bool on);
+    QString themeMode() const { return m_themeMode; }
+    void setThemeMode(const QString &mode);
 
     QStringList presetNames() const;
     QString currentPreset() const { return m_currentPreset; }
@@ -160,6 +163,7 @@ signals:
     void monitorChanged();
     void autostartChanged();
     void showWelcomeChanged();
+    void themeModeChanged();
     void presetsChanged();
     void calibChanged();
     void zonesChanged();
@@ -197,6 +201,7 @@ private:
     int m_engineAttempts = 0;
     bool m_monitor = false;
     bool m_showWelcome = true;
+    QString m_themeMode = QStringLiteral("system");
 
     qreal m_inPeak = -120, m_noiseVad = 0, m_gateLevel = -120, m_gateReduction = 0, m_compLevel = -120;
     qreal m_compReduction = 0, m_deessReduction = 0, m_outPeak = -120, m_limReduction = 0;

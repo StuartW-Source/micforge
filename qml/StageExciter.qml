@@ -3,7 +3,7 @@ import QtQuick.Layouts
 
 StagePanel {
     title: "Exciter"
-    accent: "#ffe066"
+    accent: Theme.exciter
     enableParam: "exciterOn"
     effectName: "exciter"
     visualWidth: 0
@@ -12,12 +12,12 @@ StagePanel {
 
     ParamSlider {
         paramKey: "exciterAmount"; label: "Amount"; from: 0; to: 100; stepSize: 1
-        accent: "#ffe066"
+        accent: Theme.exciter
         format: (v) => Math.round(v) + " %"
     }
     ParamSlider {
         paramKey: "exciterFreq"; label: "Starting from"; from: 1500; to: 10000; logScale: true; stepSize: 50
-        accent: "#ffe066"
+        accent: Theme.exciter
         format: (v) => Theme.fmtHz(v)
         help: "Lower (2–3 kHz) = more presence and bite. Higher (6–10 kHz) = airy sparkle."
     }

@@ -4,7 +4,7 @@ import QtQuick.Layouts
 StagePanel {
     id: root
     title: "AI Noise Removal"
-    accent: "#7ee0c3"
+    accent: Theme.noise
     enableParam: "noiseOn"
     effectName: "noise"
     visualWidth: 220
@@ -24,8 +24,8 @@ StagePanel {
         Layout.columnSpan: root.columns
         implicitHeight: unavailText.implicitHeight + 20
         radius: 8
-        color: Qt.rgba(Theme.warn.r, Theme.warn.g, Theme.warn.b, 0.10)
-        border.color: Qt.rgba(Theme.warn.r, Theme.warn.g, Theme.warn.b, 0.45)
+        color: Theme.alpha(Theme.warn, 0.10)
+        border.color: Theme.alpha(Theme.warn, 0.45)
         Text {
             id: unavailText
             anchors { fill: parent; margins: 10 }
@@ -47,7 +47,7 @@ StagePanel {
             Rectangle {
                 height: parent.height; radius: 9
                 width: parent.width * root.vad
-                color: "#7ee0c3"
+                color: Theme.noise
                 Behavior on width { NumberAnimation { duration: 60 } }
             }
         }
@@ -68,7 +68,7 @@ StagePanel {
 
     ParamSlider {
         paramKey: "noiseAmount"; label: "Strength"; from: 0; to: 100; stepSize: 1
-        accent: "#7ee0c3"
+        accent: Theme.noise
         format: (v) => Math.round(v) + " %"
         help: "How much of the cleaned signal you hear. 100% = fully cleaned. Lower blends some of the original back in for a more natural sound."
     }

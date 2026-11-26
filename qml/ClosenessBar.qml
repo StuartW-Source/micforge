@@ -32,8 +32,8 @@ Item {
         radius: 11
         gradient: Gradient {
             orientation: Gradient.Horizontal
-            GradientStop { position: 0; color: Qt.rgba(Theme.tone.r, Theme.tone.g, Theme.tone.b, 0.25) }
-            GradientStop { position: 1; color: Qt.rgba(Theme.gate.r, Theme.gate.g, Theme.gate.b, 0.25) }
+            GradientStop { position: 0; color: Theme.alpha(Theme.tone, 0.25) }
+            GradientStop { position: 1; color: Theme.alpha(Theme.gate, 0.25) }
         }
         border.color: Theme.border
         opacity: root.enabledCheck ? 1 : 0.5
@@ -50,7 +50,7 @@ Item {
             y: (parent.height - height) / 2
             width: 14; height: 14; radius: 7
             color: Theme.text
-            border.color: "#10131a"; border.width: 2
+            border.color: Theme.onAccent; border.width: 2
             Behavior on x { NumberAnimation { duration: 80 } }
         }
     }

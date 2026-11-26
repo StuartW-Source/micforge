@@ -20,7 +20,7 @@ StagePanel {
         Layout.fillWidth: true
         spacing: 6
         Text { text: "Microphone"; color: Theme.textDim; font.pixelSize: 12 }
-        ComboBox {
+        MfComboBox {
             Layout.fillWidth: true
             model: controller.sources
             textRole: "description"

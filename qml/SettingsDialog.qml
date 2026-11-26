@@ -10,7 +10,7 @@ Popup {
     width: 560
     padding: 28
     background: Rectangle { color: Theme.panel; radius: 18; border.color: Theme.border }
-    Overlay.modal: Rectangle { color: "#b0000000" }
+    Overlay.modal: Rectangle { color: Theme.scrim }
 
     component SettingRow: RowLayout {
         id: row

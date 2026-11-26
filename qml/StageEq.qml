@@ -4,7 +4,7 @@ import QtQuick.Layouts
 StagePanel {
     id: root
     title: "Equaliser"
-    accent: "#ffcf5c"
+    accent: Theme.eq
     enableParam: "eqOn"
     effectName: "eq"
     visualWidth: 0
@@ -19,7 +19,7 @@ StagePanel {
         Layout.fillWidth: true
         Layout.columnSpan: root.columns
         Layout.preferredHeight: 260
-        accent: "#ffcf5c"
+        accent: Theme.eq
     }
 
     // Band selector chips.
@@ -36,7 +36,7 @@ StagePanel {
                     anchors.centerIn: parent
                     text: index + 1
                     font.bold: true
-                    color: graph.selected === index + 1 ? "#10131a" : Theme.textDim
+                    color: graph.selected === index + 1 ? Theme.onAccent : Theme.textDim
                 }
                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: graph.selected = index + 1 }
             }

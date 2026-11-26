@@ -16,14 +16,17 @@ ApplicationWindow {
         window: Theme.panel; windowText: Theme.text
         base: Theme.card; alternateBase: Theme.cardHi; text: Theme.text
         button: Theme.card; buttonText: Theme.text
-        highlight: Theme.input; highlightedText: "#10131a"
-        mid: Theme.border; dark: "#0e1015"; light: Theme.cardHi; midlight: Theme.cardHi
-        placeholderText: Theme.textFaint; toolTipBase: "#0d0f13"; toolTipText: Theme.text
+        highlight: Theme.input; highlightedText: Theme.onAccent
+        mid: Theme.border; dark: Theme.well; light: Theme.cardHi; midlight: Theme.cardHi
+        placeholderText: Theme.textFaint; toolTipBase: Theme.tooltip; toolTipText: Theme.text
     }
 
     onClosing: (close) => {
         if (trayAvailable) { close.accepted = false; win.hide() }
     }
+
+    // Theme: the saved preference, or MICFORGE_THEME for screenshots.
+    Binding { target: Theme; property: "mode"; value: initialTheme !== "" ? initialTheme : controller.themeMode }
 
     readonly property var p: controller.params
     readonly property bool bypassed: p.bypass > 0.5
@@ -33,35 +36,35 @@ ApplicationWindow {
     // removed and re-added from the Effect Library ("optional" = the parameter prefix of xxAdded / xxOn).
     readonly property var stageDefs: [
         { id: "input",     title: "Input",          accent: Theme.input,  enable: "",            optional: "",          file: "StageInput.qml" },
-        { id: "noise",     title: "Noise Removal",  accent: "#7ee0c3",    enable: "noiseOn",     optional: "noise",     file: "StageNoise.qml",
+        { id: "noise",     title: "Noise Removal",  accent: Theme.noise,    enable: "noiseOn",     optional: "noise",     file: "StageNoise.qml",
           group: "Clean up", glyph: "≋", blurb: "AI removes fans, keyboard clicks and hum while you talk." },
         { id: "lowcut",    title: "Low Cut",        accent: Theme.lowcut, enable: "lowCutOn",    optional: "lowCut",    file: "StageLowCut.qml",
           group: "Clean up", glyph: "⌒", blurb: "Removes rumble, desk bumps and boom." },
         { id: "gate",      title: "Voice Gate",     accent: Theme.gate,   enable: "gateOn",      optional: "gate",      file: "StageGate.qml",
           group: "Clean up", glyph: "◐", blurb: "Mutes the mic between your words and keeps other voices out." },
-        { id: "autolevel", title: "Auto Level",     accent: "#8fd16a",    enable: "autoLevelOn", optional: "autoLevel", file: "StageAutoLevel.qml",
+        { id: "autolevel", title: "Auto Level",     accent: Theme.autolevel,    enable: "autoLevelOn", optional: "autoLevel", file: "StageAutoLevel.qml",
           group: "Shape", glyph: "⇅", blurb: "Keeps your volume steady automatically, quiet or loud." },
         { id: "comp",      title: "Compressor",     accent: Theme.comp,   enable: "compOn",      optional: "comp",      file: "StageComp.qml",
           group: "Shape", glyph: "▤", blurb: "Evens out loud and quiet moments." },
-        { id: "deess",     title: "De-esser",       accent: "#c9a0ff",    enable: "deessOn",     optional: "deess",     file: "StageDeess.qml",
+        { id: "deess",     title: "De-esser",       accent: Theme.deess,    enable: "deessOn",     optional: "deess",     file: "StageDeess.qml",
           group: "Clean up", glyph: "ʃ", blurb: "Softens harsh S and T sounds." },
-        { id: "vc",        title: "Voice Changer",  accent: "#ff9f43",    enable: "vcOn",        optional: "vc",        file: "StageVoice.qml",
+        { id: "vc",        title: "Voice Changer",  accent: Theme.voice,    enable: "vcOn",        optional: "vc",        file: "StageVoice.qml",
           group: "Fun", glyph: "☺", blurb: "Chipmunk, robot, monster, radio and more, with one-click presets." },
-        { id: "eq",        title: "Equaliser",      accent: "#ffcf5c",    enable: "eqOn",        optional: "eq",        file: "StageEq.qml",
+        { id: "eq",        title: "Equaliser",      accent: Theme.eq,    enable: "eqOn",        optional: "eq",        file: "StageEq.qml",
           group: "Shape", glyph: "∿", blurb: "Five draggable points for precise tone shaping." },
         { id: "tone",      title: "Tone",           accent: Theme.tone,   enable: "toneOn",      optional: "tone",      file: "StageTone.qml",
           group: "Shape", glyph: "♪", blurb: "Simple Bass, Presence and Air controls." },
-        { id: "plugins",   title: "Plugins",        accent: "#4dd0e1",    enable: "pluginsOn",   optional: "plugins",   file: "StagePlugins.qml",
+        { id: "plugins",   title: "Plugins",        accent: Theme.plugins,    enable: "pluginsOn",   optional: "plugins",   file: "StagePlugins.qml",
           group: "Your plugins", glyph: "⧉", blurb: "Load your own VST3 and LV2 effects (LSP, Calf, x42 and more)." },
-        { id: "warmth",    title: "Warmth",         accent: "#ff7b5c",    enable: "warmthOn",    optional: "warmth",    file: "StageWarmth.qml",
+        { id: "warmth",    title: "Warmth",         accent: Theme.warmth,    enable: "warmthOn",    optional: "warmth",    file: "StageWarmth.qml",
           group: "Shape", glyph: "◉", blurb: "Analogue-style saturation for a richer, rounder voice." },
-        { id: "exciter",   title: "Exciter",        accent: "#ffe066",    enable: "exciterOn",   optional: "exciter",   file: "StageExciter.qml",
+        { id: "exciter",   title: "Exciter",        accent: Theme.exciter,    enable: "exciterOn",   optional: "exciter",   file: "StageExciter.qml",
           group: "Shape", glyph: "✧", blurb: "Adds sparkle and clarity so you cut through." },
-        { id: "doubler",   title: "Doubler",        accent: "#6ec6ff",    enable: "doublerOn",   optional: "doubler",   file: "StageDoubler.qml",
+        { id: "doubler",   title: "Doubler",        accent: Theme.doubler,    enable: "doublerOn",   optional: "doubler",   file: "StageDoubler.qml",
           group: "Space", glyph: "⧉", blurb: "Thicker, fuller voice, like two takes layered." },
-        { id: "echo",      title: "Echo",           accent: "#a3a8ff",    enable: "echoOn",      optional: "echo",      file: "StageEcho.qml",
+        { id: "echo",      title: "Echo",           accent: Theme.echo,    enable: "echoOn",      optional: "echo",      file: "StageEcho.qml",
           group: "Space", glyph: "⟲", blurb: "Repeats that fade away. Subtle slapback to canyon." },
-        { id: "reverb",    title: "Reverb",         accent: "#b388ff",    enable: "reverbOn",    optional: "reverb",    file: "StageReverb.qml",
+        { id: "reverb",    title: "Reverb",         accent: Theme.reverb,    enable: "reverbOn",    optional: "reverb",    file: "StageReverb.qml",
           group: "Space", glyph: "◌", blurb: "Puts your voice in a room, hall or cathedral." },
         { id: "output",    title: "Output",         accent: Theme.output, enable: "",            optional: "",          file: "StageOutput.qml" }
     ]
@@ -139,9 +142,9 @@ ApplicationWindow {
                     GradientStop { position: 0; color: Theme.input }
                     GradientStop { position: 1; color: Theme.gate }
                 }
-                Rectangle { x: 14; y: 7; width: 10; height: 16; radius: 5; color: "#10131a" }
-                Rectangle { x: 18; y: 25; width: 2; height: 5; color: "#10131a" }
-                Rectangle { x: 13; y: 30; width: 12; height: 2; radius: 1; color: "#10131a" }
+                Rectangle { x: 14; y: 7; width: 10; height: 16; radius: 5; color: Theme.onAccent }
+                Rectangle { x: 18; y: 25; width: 2; height: 5; color: Theme.onAccent }
+                Rectangle { x: 13; y: 30; width: 12; height: 2; radius: 1; color: Theme.onAccent }
             }
             ColumnLayout {
                 spacing: 0
@@ -159,8 +162,8 @@ ApplicationWindow {
                                            : !controller.engineOk ? Theme.danger
                                            : !controller.captureRunning ? Theme.warn
                                            : controller.virtualMicInUse ? Theme.gate : Theme.input
-                color: Qt.rgba(c.r, c.g, c.b, 0.12)
-                border.color: Qt.rgba(c.r, c.g, c.b, 0.5)
+                color: Theme.alpha(c, 0.12)
+                border.color: Theme.alpha(c, 0.5)
                 Row {
                     id: statusRow
                     anchors.centerIn: parent
@@ -255,8 +258,8 @@ ApplicationWindow {
             Layout.fillWidth: true
             implicitHeight: welcomeRow.implicitHeight + 26
             radius: Theme.radius
-            color: Qt.rgba(Theme.input.r, Theme.input.g, Theme.input.b, 0.08)
-            border.color: Qt.rgba(Theme.input.r, Theme.input.g, Theme.input.b, 0.35)
+            color: Theme.alpha(Theme.input, 0.08)
+            border.color: Theme.alpha(Theme.input, 0.35)
             RowLayout {
                 id: welcomeRow
                 anchors { fill: parent; margins: 13; leftMargin: 18 }
@@ -275,7 +278,7 @@ ApplicationWindow {
                             Layout.alignment: Qt.AlignTop
                             width: 26; height: 26; radius: 13
                             color: Theme.input
-                            Text { anchors.centerIn: parent; text: modelData[0]; font.bold: true; color: "#10131a" }
+                            Text { anchors.centerIn: parent; text: modelData[0]; font.bold: true; color: Theme.onAccent }
                         }
                         ColumnLayout {
                             Layout.fillWidth: true
@@ -314,8 +317,8 @@ ApplicationWindow {
                 implicitHeight: noticeRow.implicitHeight + 16
                 radius: 8
                 readonly property color c: modelData.kind === "danger" ? Theme.danger : modelData.kind === "warn" ? Theme.warn : Theme.input
-                color: Qt.rgba(c.r, c.g, c.b, 0.10)
-                border.color: Qt.rgba(c.r, c.g, c.b, 0.45)
+                color: Theme.alpha(c, 0.10)
+                border.color: Theme.alpha(c, 0.45)
                 RowLayout {
                     id: noticeRow
                     anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: 14; rightMargin: 8 }
@@ -343,8 +346,8 @@ ApplicationWindow {
             Layout.fillWidth: true
             implicitHeight: 36
             radius: 8
-            color: Qt.rgba(Theme.warn.r, Theme.warn.g, Theme.warn.b, 0.12)
-            border.color: Qt.rgba(Theme.warn.r, Theme.warn.g, Theme.warn.b, 0.5)
+            color: Theme.alpha(Theme.warn, 0.12)
+            border.color: Theme.alpha(Theme.warn, 0.5)
             Text {
                 anchors.centerIn: parent
                 text: "Comparing: you're hearing the RAW microphone (only input gain applied). Click “Raw mic” again to switch processing back on."
@@ -471,7 +474,7 @@ ApplicationWindow {
                         }
                         Timer { id: miniTimer; interval: 150; onTriggered: miniGate.sticky = false }
                         readonly property bool lit: (controller.gateOpen || sticky) && win.p.gateOn > 0.5 && !win.bypassed
-                        color: lit ? Qt.rgba(Theme.gate.r, Theme.gate.g, Theme.gate.b, 0.2) : "#0e1015"
+                        color: lit ? Theme.alpha(Theme.gate, 0.2) : Theme.well
                         border.color: lit ? Theme.gate : Theme.border
                         Text {
                             anchors.centerIn: parent
@@ -499,7 +502,7 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         implicitHeight: 40
                         radius: 10
-                        color: controller.virtualMicInUse ? Qt.rgba(Theme.output.r, Theme.output.g, Theme.output.b, 0.15) : "#0e1015"
+                        color: controller.virtualMicInUse ? Theme.alpha(Theme.output, 0.15) : Theme.well
                         border.color: controller.virtualMicInUse ? Theme.output : Theme.border
                         Text {
                             anchors.centerIn: parent
@@ -536,7 +539,7 @@ ApplicationWindow {
         padding: 24
         onOpened: { nameField.text = ""; nameField.forceActiveFocus() }
         background: Rectangle { color: Theme.panel; radius: 16; border.color: Theme.border }
-        Overlay.modal: Rectangle { color: "#a0000000" }
+        Overlay.modal: Rectangle { color: Theme.scrim }
         contentItem: ColumnLayout {
             spacing: 14
             Text { text: "Save preset"; color: Theme.text; font.pixelSize: 20; font.weight: Font.Bold }

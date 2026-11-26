@@ -2,27 +2,90 @@ pragma Singleton
 import QtQuick
 
 QtObject {
-    readonly property color bg: "#121419"
-    readonly property color panel: "#1a1d24"
-    readonly property color card: "#1f232b"
-    readonly property color cardHi: "#262b35"
-    readonly property color border: "#2d323d"
-    readonly property color track: "#2b303b"
-    readonly property color text: "#e8eaf0"
-    readonly property color textDim: "#9aa2b3"
-    readonly property color textFaint: "#6b7385"
+    // ------------------------------------------------------------------ design tokens
+    // Every colour in the UI comes from here; components never hard-code colours.
+    // `mode` is "system" (follow the desktop's light/dark setting), "dark" or "light".
+    property string mode: "system"
+    readonly property bool dark: mode === "dark"
+                                 || (mode === "system" && Qt.styleHints.colorScheme !== Qt.ColorScheme.Light)
+    function pick(d, l) { return dark ? d : l }
 
-    readonly property color input: "#5aa9ff"
-    readonly property color lowcut: "#9b8cff"
-    readonly property color gate: "#3fdc98"
-    readonly property color comp: "#ffb347"
-    readonly property color tone: "#ff7aa8"
-    readonly property color output: "#56d4e8"
-    readonly property color danger: "#ff5c5c"
-    readonly property color warn: "#ffd24d"
+    // Surfaces (back to front) and lines.
+    readonly property color bg:        pick("#121419", "#eceef2")
+    readonly property color panel:     pick("#1a1d24", "#f7f8fa")
+    readonly property color card:      pick("#1f232b", "#ffffff")
+    readonly property color cardHi:    pick("#262b35", "#eef1f6")
+    readonly property color well:      pick("#0e1015", "#e4e7ed")    // inset areas: meters, graphs
+    readonly property color border:    pick("#2d323d", "#d3d8e1")
+    readonly property color borderHi:  pick("#3a4050", "#b9c0cc")
+    readonly property color track:     pick("#2b303b", "#dde1e8")
+    readonly property color grid:      pick("#252a34", "#e3e6ec")    // graph grid lines
+    readonly property color tooltip:   pick("#0d0f13", "#ffffff")
+    readonly property color scrim:     pick("#a0000000", "#66000000") // behind modal dialogs
 
+    // Text.
+    readonly property color text:      pick("#e8eaf0", "#181b22")
+    readonly property color textDim:   pick("#9aa2b3", "#4a5263")
+    readonly property color textFaint: pick("#6b7385", "#737b8c")
+    readonly property color onAccent:  pick("#10131a", "#ffffff")    // text/icons drawn on an accent fill
+
+    // Semantic + stage accents. Light mode uses deeper shades so accent-coloured text stays readable.
+    readonly property color input:     pick("#5aa9ff", "#1f6fd1")
+    readonly property color lowcut:    pick("#9b8cff", "#6450dc")
+    readonly property color gate:      pick("#3fdc98", "#11895a")
+    readonly property color comp:      pick("#ffb347", "#b86400")
+    readonly property color tone:      pick("#ff7aa8", "#cc3a72")
+    readonly property color output:    pick("#56d4e8", "#0d8197")
+    readonly property color danger:    pick("#ff5c5c", "#cc2f2f")
+    readonly property color warn:      pick("#ffd24d", "#9a6d00")
+    readonly property color noise:     pick("#7ee0c3", "#128a72")
+    readonly property color autolevel: pick("#8fd16a", "#46861f")
+    readonly property color deess:     pick("#c9a0ff", "#8048d8")
+    readonly property color voice:     pick("#ff9f43", "#bd6110")
+    readonly property color eq:        pick("#ffcf5c", "#9a7300")
+    readonly property color plugins:   pick("#4dd0e1", "#0c8292")
+    readonly property color warmth:    pick("#ff7b5c", "#c94425")
+    readonly property color exciter:   pick("#ffe066", "#8f7400")
+    readonly property color doubler:   pick("#6ec6ff", "#1c78ba")
+    readonly property color echo:      pick("#a3a8ff", "#5158d0")
+    readonly property color reverb:    pick("#b388ff", "#7444d6")
+    readonly property color focus:     input                         // keyboard focus ring
+    readonly property color knob:      pick("#e8eaf0", "#ffffff")    // slider handles
+    readonly property color knobPressed: pick("#ffffff", "#eef1f6")
+    readonly property color micGrille: pick("#c7ccd6", "#8e96a6")    // placement diagram
+    readonly property color micBody:   pick("#8a90a0", "#5d6576")
+
+    function alpha(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
+    // Tinted background + border for notices/badges in an accent colour.
+    function tint(c)   { return Qt.rgba(c.r, c.g, c.b, dark ? 0.12 : 0.10) }
+    function tintBorder(c) { return Qt.rgba(c.r, c.g, c.b, dark ? 0.50 : 0.55) }
+
+    // Spacing scale (px, before Qt's high-DPI scaling).
+    readonly property int sp1: 4
+    readonly property int sp2: 8
+    readonly property int sp3: 12
+    readonly property int sp4: 16
+    readonly property int sp5: 24
+    readonly property int sp6: 32
+
+    // Corner radii.
+    readonly property int radiusSm: 6
     readonly property int radius: 12
+    readonly property int radiusLg: 16
+
+    // Type scale.
+    readonly property int fsCaption: 10
+    readonly property int fsSmall: 11
+    readonly property int fsBody: 12
+    readonly property int fsBodyLg: 13
+    readonly property int fsTitle: 15
+    readonly property int fsHeading: 19
+    readonly property int fsDisplay: 22
     readonly property string mono: "monospace"
+
+    // Control sizes.
+    readonly property int controlHeight: 34
+    readonly property int controlHeightSm: 28
 
     // Voice Changer presets. Every preset sets every Voice Changer control, so the current preset can be recognised.
     function vc(pitch, character, robot, robotFreq, radio, drive, wobble, wobbleRate, mix) {

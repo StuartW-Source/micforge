@@ -11,7 +11,7 @@ Popup {
     height: Math.min(760, parent ? parent.height - 60 : 760)
     padding: 26
     background: Rectangle { color: Theme.panel; radius: 18; border.color: Theme.border }
-    Overlay.modal: Rectangle { color: "#b0000000" }
+    Overlay.modal: Rectangle { color: Theme.scrim }
     onOpened: { search.text = ""; search.forceActiveFocus() }
 
     readonly property var pm: controller.plugins
@@ -45,7 +45,7 @@ Popup {
         RowLayout {
             Layout.fillWidth: true
             spacing: 10
-            TextField {
+            MfTextField {
                 id: search
                 Layout.fillWidth: true
                 placeholderText: "Search by name, maker or type (e.g. compressor, reverb, LSP)…"
@@ -54,8 +54,8 @@ Popup {
                 model: [["All", ""], ["VST3", "VST3"], ["LV2", "LV2"]]
                 Rectangle {
                     width: lbl.implicitWidth + 26; height: 32; radius: 16
-                    color: root.format === modelData[1] ? Qt.rgba(0.30, 0.82, 0.88, 0.2) : Theme.card
-                    border.color: root.format === modelData[1] ? "#4dd0e1" : Theme.border
+                    color: root.format === modelData[1] ? Theme.alpha(Theme.plugins, 0.2) : Theme.card
+                    border.color: root.format === modelData[1] ? Theme.plugins : Theme.border
                     Text { id: lbl; anchors.centerIn: parent; text: modelData[0]; color: Theme.text; font.pixelSize: 12; font.bold: true }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.format = modelData[1] }
                 }
@@ -86,9 +86,9 @@ Popup {
                     spacing: 12
                     Rectangle {
                         width: 46; height: 22; radius: 6
-                        color: modelData.format === "VST3" ? Qt.rgba(1, 0.62, 0.26, 0.2) : Qt.rgba(0.36, 0.66, 1, 0.2)
+                        color: modelData.format === "VST3" ? Theme.alpha(Theme.voice, 0.2) : Theme.alpha(Theme.input, 0.2)
                         Text { anchors.centerIn: parent; text: modelData.format; font.pixelSize: 10; font.bold: true
-                               color: modelData.format === "VST3" ? "#ff9f43" : Theme.input }
+                               color: modelData.format === "VST3" ? Theme.voice : Theme.input }
                     }
                     ColumnLayout {
                         Layout.fillWidth: true
@@ -102,7 +102,7 @@ Popup {
                     PillButton {
                         text: "Add"
                         primary: true
-                        accent: "#4dd0e1"
+                        accent: Theme.plugins
                         implicitHeight: 30
                         enabled: !root.full
                         onClicked: { root.pm.add(modelData.format, modelData.id); root.close() }

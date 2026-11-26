@@ -143,6 +143,7 @@ int main(int argc, char *argv[]) {
     ctx->setContextProperty("initialPage", qEnvironmentVariable("MICFORGE_PAGE"));
     ctx->setContextProperty("initialSetup", qEnvironmentVariableIsSet("MICFORGE_SETUP"));
     ctx->setContextProperty("initialLibrary", qEnvironmentVariableIsSet("MICFORGE_LIBRARY"));
+    ctx->setContextProperty("initialTheme", qEnvironmentVariable("MICFORGE_THEME")); // screenshot aid: dark | light
     ctx->setContextProperty("initialExpandPlugin", qEnvironmentVariableIsSet("MICFORGE_EXPAND_PLUGIN"));
     engine.load(QUrl("qrc:/qml/Main.qml"));
     auto *window = engine.rootObjects().isEmpty() ? nullptr : qobject_cast<QQuickWindow *>(engine.rootObjects().first());
@@ -265,6 +266,9 @@ int main(int argc, char *argv[]) {
     // Development aid: save a picture of MicForge's own window, then quit.
     const QString snapshot = qEnvironmentVariable("MICFORGE_SNAPSHOT");
     if (!snapshot.isEmpty()) {
+        // MICFORGE_SIZE=WxH renders the window at a given size (for layout review at several sizes).
+        const QStringList size = qEnvironmentVariable("MICFORGE_SIZE").split('x');
+        if (size.size() == 2 && size[0].toInt() > 0 && size[1].toInt() > 0) window->resize(size[0].toInt(), size[1].toInt());
         QTimer::singleShot(qEnvironmentVariableIntValue("MICFORGE_SNAPSHOT_DELAY") > 0 ? qEnvironmentVariableIntValue("MICFORGE_SNAPSHOT_DELAY") : 2500, &app, [&] {
             window->grabWindow().save(snapshot);
             app.quit();

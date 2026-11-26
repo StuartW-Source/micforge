@@ -60,7 +60,7 @@ StagePanel {
             Timer { id: stickyTimer; interval: 120; onTriggered: gateLight.sticky = false }
             onOpenChanged: { if (open) gateLight.sticky = true; stickyTimer.restart() }
             readonly property bool lit: open || sticky
-            color: lit ? Qt.rgba(Theme.gate.r, Theme.gate.g, Theme.gate.b, 0.22) : "#0e1015"
+            color: lit ? Theme.alpha(Theme.gate, 0.22) : Theme.well
             border.color: lit ? Theme.gate : Theme.border
             Behavior on color { ColorAnimation { duration: 80 } }
             Column {
@@ -84,7 +84,7 @@ StagePanel {
             Layout.fillWidth: true
             implicitHeight: 64
             radius: 12
-            color: Qt.rgba(Theme.gate.r, Theme.gate.g, Theme.gate.b, 0.06)
+            color: Theme.alpha(Theme.gate, 0.06)
             border.color: Theme.border
             RowLayout {
                 anchors { fill: parent; leftMargin: 14; rightMargin: 10 }
@@ -139,7 +139,7 @@ StagePanel {
             Layout.fillHeight: true
             implicitHeight: 110
             radius: 12
-            color: "#0e1015"
+            color: Theme.well
             border.color: Theme.border
             readonly property bool known: root.zones.valid === true && root.zones.others > root.zones.room
             readonly property real db: known ? root.p.gateThreshold - root.zones.others : 0
@@ -169,8 +169,8 @@ StagePanel {
             Layout.fillHeight: true
             implicitHeight: closeCol.implicitHeight + 24
             radius: 12
-            color: "#0e1015"
-            border.color: root.p.gateCloseCheck > 0.5 ? Qt.rgba(Theme.gate.r, Theme.gate.g, Theme.gate.b, 0.5) : Theme.border
+            color: Theme.well
+            border.color: root.p.gateCloseCheck > 0.5 ? Theme.alpha(Theme.gate, 0.5) : Theme.border
             ColumnLayout {
                 id: closeCol
                 anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }

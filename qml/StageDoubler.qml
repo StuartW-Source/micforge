@@ -3,7 +3,7 @@ import QtQuick.Layouts
 
 StagePanel {
     title: "Doubler"
-    accent: "#6ec6ff"
+    accent: Theme.doubler
     enableParam: "doublerOn"
     effectName: "doubler"
     visualWidth: 0
@@ -12,12 +12,12 @@ StagePanel {
 
     ParamSlider {
         paramKey: "doublerMix"; label: "Amount"; from: 0; to: 100; stepSize: 1
-        accent: "#6ec6ff"
+        accent: Theme.doubler
         format: (v) => Math.round(v) + " %"
     }
     ParamSlider {
         paramKey: "doublerWidth"; label: "Width · movement"; from: 0; to: 100; stepSize: 1
-        accent: "#6ec6ff"
+        accent: Theme.doubler
         format: (v) => Math.round(v) + " %"
         help: "How different the copies are from you. More = more obvious, swirling chorus."
     }

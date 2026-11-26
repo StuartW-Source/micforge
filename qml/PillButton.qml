@@ -11,10 +11,20 @@ Rectangle {
     property bool primary: false
     signal clicked()
 
-    implicitHeight: 34
+    activeFocusOnTab: true
+    Accessible.role: Accessible.Button
+    Accessible.name: text !== "" && text !== "⋯" ? text : "More options"
+    Accessible.checkable: checkable
+    Accessible.checked: checked
+    Accessible.onPressAction: if (enabled) clicked()
+    Keys.onSpacePressed: if (enabled) clicked()
+    Keys.onReturnPressed: if (enabled) clicked()
+    Keys.onEnterPressed: if (enabled) clicked()
+
+    implicitHeight: Theme.controlHeight
     implicitWidth: row.implicitWidth + 28
     radius: height / 2
-    color: checked ? Qt.rgba(accent.r, accent.g, accent.b, 0.22)
+    color: checked ? Theme.alpha(accent, 0.22)
                    : primary ? accent
                    : mouse.containsMouse ? Theme.cardHi : Theme.card
     border.color: checked ? accent : primary ? accent : Theme.border
@@ -28,14 +38,14 @@ Rectangle {
         Text {
             visible: root.icon !== ""
             text: root.icon
-            color: root.primary && !root.checked ? "#10131a" : (root.checked ? root.accent : Theme.text)
+            color: root.primary && !root.checked ? Theme.onAccent : (root.checked ? root.accent : Theme.text)
             font.pixelSize: 14
             anchors.verticalCenter: parent.verticalCenter
         }
         Text {
             text: root.text
-            color: root.primary && !root.checked ? "#10131a" : (root.checked ? root.accent : Theme.text)
-            font.pixelSize: 13
+            color: root.primary && !root.checked ? Theme.onAccent : (root.checked ? root.accent : Theme.text)
+            font.pixelSize: Theme.fsBodyLg
             font.weight: Font.DemiBold
             anchors.verticalCenter: parent.verticalCenter
         }
@@ -47,4 +57,5 @@ Rectangle {
         cursorShape: Qt.PointingHandCursor
         onClicked: root.clicked()
     }
+    FocusRing {}
 }

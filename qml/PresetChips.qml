@@ -17,7 +17,7 @@ Flow {
             width: root.big ? 132 : label.implicitWidth + 28
             height: root.big ? 74 : 30
             radius: root.big ? 12 : 15
-            color: current ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.22) : (m.containsMouse ? Theme.cardHi : Theme.card)
+            color: current ? Theme.alpha(root.accent, 0.22) : (m.containsMouse ? Theme.cardHi : Theme.card)
             border.color: current ? root.accent : Theme.border
             border.width: current ? 2 : 1
             Column {

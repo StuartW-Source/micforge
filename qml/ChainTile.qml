@@ -12,12 +12,19 @@ Rectangle {
     property int number: 1
     signal clicked()
 
+    activeFocusOnTab: true
+    Accessible.role: Accessible.Button
+    Accessible.name: title + ": " + (on ? status : "off")
+    Accessible.onPressAction: clicked()
+    Keys.onSpacePressed: clicked()
+    Keys.onReturnPressed: clicked()
+
     readonly property bool on: (enableParam === "" || controller.params[enableParam] > 0.5) && controller.params.bypass < 0.5
 
     width: 168
     height: 84
     radius: 12
-    color: selected ? Theme.cardHi : (mouse.containsMouse ? Qt.lighter(Theme.card, 1.08) : Theme.card)
+    color: selected ? Theme.cardHi : (mouse.containsMouse ? Theme.cardHi : Theme.card)
     border.color: selected ? accent : Theme.border
     border.width: selected ? 2 : 1
 
@@ -40,7 +47,7 @@ Rectangle {
             Rectangle {
                 width: 18; height: 18; radius: 9
                 anchors.verticalCenter: parent.verticalCenter
-                color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, root.on ? 0.25 : 0.08)
+                color: Theme.alpha(root.accent, root.on ? 0.25 : 0.08)
                 Text { anchors.centerIn: parent; text: root.number; color: root.on ? root.accent : Theme.textFaint; font.pixelSize: 10; font.bold: true }
             }
             Text {
@@ -68,6 +75,7 @@ Rectangle {
         visible: root.enableParam !== ""
         anchors { right: parent.right; top: parent.top; margins: 10 }
         paramKey: root.enableParam
+        label: root.title + " on"
         accent: root.accent
         implicitWidth: 30; implicitHeight: 17
     }
@@ -85,4 +93,5 @@ Rectangle {
             color: root.accent
         }
     }
+    FocusRing {}
 }

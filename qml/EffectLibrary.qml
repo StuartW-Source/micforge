@@ -14,7 +14,7 @@ Popup {
     height: Math.min(820, parent ? parent.height - 60 : 820)
     padding: 28
     background: Rectangle { color: Theme.panel; radius: 18; border.color: Theme.border }
-    Overlay.modal: Rectangle { color: "#b0000000" }
+    Overlay.modal: Rectangle { color: Theme.scrim }
 
     readonly property var groups: [
         { name: "Clean up", sub: "Remove what you don't want people to hear." },
@@ -78,14 +78,14 @@ Popup {
                                     implicitHeight: 92
                                     radius: 12
                                     color: m.containsMouse ? Theme.cardHi : Theme.card
-                                    border.color: added ? Qt.rgba(modelData.accent.r, modelData.accent.g, modelData.accent.b, 0.6) : Theme.border
+                                    border.color: added ? Theme.alpha(modelData.accent, 0.6) : Theme.border
                                     RowLayout {
                                         anchors { fill: parent; margins: 12 }
                                         spacing: 12
                                         Rectangle {
                                             Layout.alignment: Qt.AlignTop
                                             width: 38; height: 38; radius: 10
-                                            color: Qt.rgba(modelData.accent.r, modelData.accent.g, modelData.accent.b, 0.18)
+                                            color: Theme.alpha(modelData.accent, 0.18)
                                             Text { anchors.centerIn: parent; text: modelData.glyph; color: modelData.accent; font.pixelSize: 20 }
                                         }
                                         ColumnLayout {

@@ -37,3 +37,9 @@ ToggleSwitch 1.0 ToggleSwitch.qml
 ToolTipLite 1.0 ToolTipLite.qml
 VoiceSetup 1.0 VoiceSetup.qml
 ZoneBar 1.0 ZoneBar.qml
+FocusRing 1.0 FocusRing.qml
+MfComboBox 1.0 MfComboBox.qml
+MfTextField 1.0 MfTextField.qml
+MfMenu 1.0 MfMenu.qml
+MfMenuItem 1.0 MfMenuItem.qml
+MfMenuSeparator 1.0 MfMenuSeparator.qml
