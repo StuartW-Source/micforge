@@ -47,8 +47,8 @@ struct Meters {
     std::atomic<float> gateOpen{0};        // 1 if open at any point
     std::atomic<float> gateTilt{-120};
     // Why the gate is open or closed (highest during the block): 0 = gate off, 1 = closed: too quiet,
-    // 2 = closed: steady background noise raised the threshold, 3 = closed: loud enough but not close
-    // enough, 4 = open.
+    // 2 = closed: steady background noise raised the threshold, 3 = closed: not a voice (AI voice
+    // detector), 4 = closed: loud enough but not close enough, 5 = open.
     std::atomic<int> gateReason{0};
     std::atomic<float> gateFloor{-120};    // steady background level the gate measured, dB (-120 = none)
     std::atomic<float> gateOpenAt{-120};   // threshold in use (raised above the setting by background noise)     // closeness (bass minus treble, dB) of current sound; -120 = silence
@@ -322,9 +322,11 @@ class VoiceChain {
 public:
     explicit VoiceChain(float sampleRate = 48000) : fs(sampleRate), rev(sampleRate) {
         denoise = mf::rnnoise::create(); // nullptr if rnnoise isn't installed: the stage passes audio through
+        vadState = mf::rnnoise::create(); // voice detector for the gate when Noise Removal isn't running
     }
     ~VoiceChain() {
         mf::rnnoise::destroy(denoise);
+        mf::rnnoise::destroy(vadState);
     }
     VoiceChain(const VoiceChain &) = delete;
     VoiceChain &operator=(const VoiceChain &) = delete;
@@ -366,6 +368,7 @@ private:
         tilt.reset();
         gateIsOpen = false; gateHoldLeft = 0; gateGainDb = 0;
         gDelay.fill(0); gPos = 0;
+        vIn.fill(0); vOut.fill(0); vPos = 0; vadHold = 0;
         frameMax = 0; frameCount = 0; swSum = swSq = 0; swFrames = 0; swHead = swCount = 0; floorValid = false;
         applyFloor();
     }
@@ -518,18 +521,36 @@ private:
                 // OPENING: every syllable has a vowel that passes it, and level + hold then carry the
                 // brighter consonants (s, t, k) through, so your words aren't chopped.
                 trackFloor(env);
+                // AI voice detector: use Noise Removal's result if it's running, otherwise run our own.
+                bool voiceOk = true;
+                if (useVad) {
+                    if (!(fNoise.running() && denoise)) {
+                        vIn[vPos] = x * 32768.0f;
+                        if (++vPos == kNoiseFrame) { vPos = 0; lastVad = mf::rnnoise::processFrame(vadState, vOut.data(), vIn.data()); }
+                    }
+                    // Hold a "voice" verdict for 200 ms so the consonants and gaps inside a phrase pass.
+                    if (lastVad >= vadThr) vadHold = vadHoldSamples;
+                    else if (vadHold > 0) --vadHold;
+                    voiceOk = vadHold > 0;
+                }
                 const bool closeOpen = !closeCheck || (tiltBrighter ? tilt.below(tiltOpenPow) : tilt.above(tiltOpenPow));
                 float target;
-                if (env > effOpenLin && closeOpen) {
+                if (env > effOpenLin && closeOpen && voiceOk) {
                     gateIsOpen = true;
                     gateHoldLeft = gateHoldSamples;
                 } else if (env < effCloseLin) {
                     if (gateHoldLeft > 0) --gateHoldLeft;
                     else gateIsOpen = false;
-                } else if (gateIsOpen) {
+                } else if (gateIsOpen && voiceOk) {
+                    // Above the close level: keep holding. With the voice detector on, only while it still
+                    // hears a voice (its 200 ms memory carries consonants and short gaps).
                     gateHoldLeft = gateHoldSamples;
+                } else if (gateIsOpen) {
+                    if (gateHoldLeft > 0) --gateHoldLeft;
+                    else gateIsOpen = false;
                 }
-                const int reason = gateIsOpen ? 4 : env > effOpenLin && !closeOpen ? 3 : env > gateOpenLin ? 2 : 1;
+                const int reason = gateIsOpen ? 5 : env > effOpenLin && !closeOpen ? 4 : env > effOpenLin && !voiceOk ? 3
+                                 : env > gateOpenLin ? 2 : 1;
                 gateReasonMax = std::max(gateReasonMax, reason);
                 if (gateIsOpen) target = 0.0f;
                 else if (expander) target = std::max(gateRangeDb, (linToDb(env) - gateThrDb) * (gateRatio - 1.0f));
@@ -721,7 +742,11 @@ private:
         gateRangeDb = p.get(GateRange);
         gateRatio = p.get(GateRatio);
         gateHoldSamples = int(p.get(GateHold) * 0.001f * fs);
-        gLookahead = std::clamp(int(p.get(GateLookahead) * 0.001f * fs), 0, kGateSize - 1);
+        useVad = p.get(GateVad) > 0.5f && vadState;
+        vadThr = p.get(GateVadThreshold) / 100.0f;
+        vadHoldSamples = int(0.2f * fs);
+        // The voice detector needs ~20 ms to decide, so the audio waits that long (word starts aren't clipped).
+        gLookahead = std::clamp(int(std::max(p.get(GateLookahead), useVad ? 20.0f : 0.0f) * 0.001f * fs), 0, kGateSize - 1);
         gAtk = onePole(p.get(GateAttack) / 2.2f, fs);
         gRel = onePole(p.get(GateRelease) / 2.2f, fs);
 
@@ -821,6 +846,12 @@ private:
     float gAtk = 0, gRel = 0, gateGainDb = 0;
     bool gateIsOpen = false;
     int gateReasonMax = 0;
+    // AI voice detector for the gate (optional).
+    DenoiseState *vadState = nullptr;
+    bool useVad = false;
+    float vadThr = 0.5f;
+    int vadHold = 0, vadHoldSamples = 9600, vPos = 0;
+    std::array<float, 480> vIn{}, vOut{};
     // Adaptive noise floor (see trackFloor).
     static constexpr int kFloorFrame = 960, kFloorFrames = 25, kFloorRiseRun = 6, kFloorHistory = 8; // 20 ms, 0.5 s, 3 s, 4 s
     static constexpr float kNotSteady = 1e9f;

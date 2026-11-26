@@ -404,8 +404,8 @@ void Controller::pollMeters() {
         // Show the most important reason seen recently ("open" or a rejection beats "too quiet") for ~0.3 s.
         const int code = m.gateReason.exchange(0);
         if (code >= m_reasonCode || --m_reasonHold <= 0) { m_reasonCode = code; m_reasonHold = 10; }
-        static const char *names[] = {"", "quiet", "noise", "far", "open"};
-        m_gateReason = QString::fromLatin1(names[std::clamp(m_reasonCode, 0, 4)]);
+        static const char *names[] = {"", "quiet", "noise", "notvoice", "far", "open"};
+        m_gateReason = QString::fromLatin1(names[std::clamp(m_reasonCode, 0, 5)]);
         m_gateFloor = m.gateFloor.load();
         m_gateOpenAt = m.gateOpenAt.load();
     }

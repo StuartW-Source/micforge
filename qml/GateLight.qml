@@ -31,6 +31,7 @@ Rectangle {
             : root.lit ? "● Your voice is passing"
             : controller.gateReason === "far" ? "Closed: not close to the mic"
             : controller.gateReason === "noise" ? "Closed: background noise"
+            : controller.gateReason === "notvoice" ? "Closed: not a voice"
             : "Gate closed"
         color: root.lit ? Theme.gate : Theme.textFaint
         font.pixelSize: Theme.fsBody

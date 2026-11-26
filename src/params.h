@@ -124,6 +124,8 @@ enum ParamId {
     Bypass,         // 1 = only channel select + input gain
     Mute,           // 1 = send silence (fades out/in without clicks); never saved
     GateAdaptive,   // 1 = raise the gate threshold above steady background noise that gets louder
+    GateVad,        // 1 = the gate also needs the AI voice detector (rnnoise) to hear a voice before opening
+    GateVadThreshold, // % voice probability needed to open
     PARAM_COUNT
 };
 
@@ -252,6 +254,8 @@ inline constexpr ParamDef kParams[PARAM_COUNT] = {
     {"bypass",         0,     0,    1},
     {"mute",           0,     0,    1},
     {"gateAdaptive",   1,     0,    1},
+    {"gateVad",        0,     0,    1},
+    {"gateVadThreshold", 90,  10,   99},
 };
 
 } // namespace mf
@@ -266,6 +270,6 @@ constexpr bool keyIs(int id, const char *k) {
 static_assert(keyIs(InputGain, "inputGain") && keyIs(GateAdded, "gateAdded") && keyIs(GateTiltDir, "gateTiltDir") &&
               keyIs(AutoLevelSpeed, "autoLevelSpeed") && keyIs(CompMakeup, "compMakeup") && keyIs(VcMix, "vcMix") &&
               keyIs(Eq5Q, "eq5Q") && keyIs(ToneAir, "toneAir") && keyIs(PluginsOn, "pluginsOn") && keyIs(ReverbMix, "reverbMix") &&
-              keyIs(Bypass, "bypass") && keyIs(Mute, "mute") && keyIs(GateAdaptive, "gateAdaptive"),
+              keyIs(Bypass, "bypass") && keyIs(Mute, "mute") && keyIs(GateAdaptive, "gateAdaptive") && keyIs(GateVadThreshold, "gateVadThreshold"),
               "kParams rows are out of step with the ParamId enum");
 } // namespace mf
