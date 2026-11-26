@@ -33,6 +33,7 @@ public:
     std::function<void(const QString &why)> onCrashed;       // UI thread
     std::function<void(int index, float value)> onValueFromPlugin; // a change made in the plugin's window
     std::function<void()> onEditorClosed;
+    std::function<void(const QString &)> onLog; // diagnostic messages from the helper
 
 protected:
     void onValueSet(int i, float v) override;
@@ -57,7 +58,7 @@ private:
     int m_stuckTicks = 0;
 };
 
-// Helper-process entry point: micforge --plugin-host <shm> <format> <id> <path> <rate>
+// Helper-process entry point: micforge --plugin-host <shm> <format> <id> <path> <rate> [name]
 int runPluginHost(int argc, char **argv);
 
 } // namespace mf

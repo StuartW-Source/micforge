@@ -176,6 +176,12 @@ if(MICFORGE_BUILD_TESTS)
     add_test(NAME remoteplugin COMMAND remoteplugin_test)
     set_tests_properties(remoteplugin PROPERTIES ENVIRONMENT "MICFORGE_HOST_BINARY=$<TARGET_FILE:micforge>;QT_QPA_PLATFORM=offscreen")
 
+    # Manual: opens a VST3 plugin window (needs lsp-plugins-vst3); not run by ctest.
+    add_executable(plugin_editor_check tests/plugin_editor_check.cpp src/plugins/remoteplugin.cpp src/plugins/bridge.cpp
+        src/plugins/plugins.cpp src/plugins/vst3host.cpp src/plugins/lv2host.cpp src/optional/lilv_api.cpp)
+    target_include_directories(plugin_editor_check PRIVATE src ${LILV_INCLUDE_DIRS})
+    target_link_libraries(plugin_editor_check PRIVATE Qt6::Core Qt6::Gui vst3host Threads::Threads ${CMAKE_DL_LIBS})
+
     add_executable(autostart_test tests/autostart_test.cpp src/platform/autostart_xdg.cpp)
     target_include_directories(autostart_test PRIVATE src)
     target_link_libraries(autostart_test PRIVATE Qt6::Core)

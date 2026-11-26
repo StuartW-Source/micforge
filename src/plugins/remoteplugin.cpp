@@ -70,7 +70,7 @@ std::unique_ptr<RemotePlugin> RemotePlugin::create(const PluginInfo &info, doubl
     const QString bin = qEnvironmentVariableIsSet("MICFORGE_HOST_BINARY") ? qEnvironmentVariable("MICFORGE_HOST_BINARY")
                                                                           : QCoreApplication::applicationFilePath();
     r->m_proc.start(bin,
-                    {"--plugin-host", QString::fromStdString(r->m_seg.name()), info.format, info.id, info.path, QString::number(rate)});
+                    {"--plugin-host", QString::fromStdString(r->m_seg.name()), info.format, info.id, info.path, QString::number(rate), info.name});
     // Wait for "ready" or "error" (plugins can take a while to load).
     QElapsedTimer t;
     t.start();
@@ -151,6 +151,9 @@ void RemotePlugin::handle(const QByteArray &l) {
             values[size_t(i)].store(float(a.at(1).toDouble()), std::memory_order_relaxed);
             if (onValueFromPlugin) onValueFromPlugin(i, float(a.at(1).toDouble()));
         }
+    } else if (o.contains("log")) {
+        if (onLog) onLog(o["log"].toString());
+        qInfo("plugin host [%s]: %s", qPrintable(info.name), qPrintable(o["log"].toString()));
     } else if (o.contains("editorClosed")) {
         if (onEditorClosed) onEditorClosed();
     } else if (o.contains("latency")) {
@@ -173,6 +176,11 @@ void RemotePlugin::checkHung() {
 
 // ---------------------------------------------------------------- helper process
 
+static void trace(const char *what) {
+    static FILE *f = qEnvironmentVariableIsSet("MICFORGE_HOST_TRACE") ? std::fopen(qgetenv("MICFORGE_HOST_TRACE").constData(), "a") : nullptr;
+    if (f) { std::fprintf(f, "%s\n", what); std::fflush(f); }
+}
+
 int runPluginHost(int argc, char **argv) {
     prctl(PR_SET_PDEATHSIG, SIGKILL); // never outlive MicForge
     if (argc < 7) return 2;
@@ -183,6 +191,7 @@ int runPluginHost(int argc, char **argv) {
     info.id = QString::fromLocal8Bit(argv[4]);
     info.path = QString::fromLocal8Bit(argv[5]);
     const double rate = QString::fromLocal8Bit(argv[6]).toDouble();
+    if (argc >= 8) info.name = QString::fromLocal8Bit(argv[7]);
     auto say = [](const QJsonObject &o) { const QByteArray b = line(o); std::fwrite(b.constData(), 1, size_t(b.size()), stdout); std::fflush(stdout); };
 
     bridge::Segment seg;
@@ -229,6 +238,8 @@ int runPluginHost(int argc, char **argv) {
         while ((nl = pending.indexOf('\n')) >= 0) {
             const QJsonObject o = QJsonDocument::fromJson(pending.left(nl)).object();
             pending.remove(0, nl + 1);
+            trace(pending.isEmpty() ? "msg" : "msg+");
+            if (o.contains("editor")) trace(o["editor"].toBool() ? "editor open requested" : "editor close requested");
             if (o.contains("set")) {
                 const QJsonArray a = o["set"].toArray();
                 inst->setValue(a.at(0).toInt(), float(a.at(1).toDouble()));
@@ -239,11 +250,27 @@ int runPluginHost(int argc, char **argv) {
                     editorWindow->resize(400, 300);
                     editorWindow->create();
                     QWindow *w = editorWindow.get();
-                    if (!inst->openEditor(uintptr_t(w->winId()), [w](int width, int height) { w->resize(width, height); })) {
+                    trace("window created; attaching plugin view");
+                    if (!inst->openEditor(uintptr_t(w->winId()), [w](int width, int height) {
+                            // VST3 sizes on X11 are physical pixels; Qt sizes are scaled by the display's ratio.
+                            const qreal dpr = w->devicePixelRatio() > 0 ? w->devicePixelRatio() : 1.0;
+                            const QSize logical(qRound(width / dpr), qRound(height / dpr));
+                            w->setMinimumSize(logical);
+                            w->setMaximumSize(logical); // the plugin decides its size; don't let the desktop maximise it
+                            w->resize(logical);
+                        })) {
+                        trace("attach failed");
                         editorWindow.reset();
                         say({{"editorClosed", true}});
                     } else {
+                        trace("attached; showing");
                         w->show();
+                        trace("shown");
+                        QTimer::singleShot(1500, &app, [w, &say] {
+                            trace("timer fired");
+                            say({{"log", QString("window: X11 0x%1, %2x%3 (scale %4), on screen: %5").arg(w->winId(), 0, 16)
+                                             .arg(w->width()).arg(w->height()).arg(w->devicePixelRatio()).arg(w->isExposed() ? "yes" : "no")}});
+                        });
                         // The user closing the window just hides it: detach the plugin's view.
                         QObject::connect(w, &QWindow::visibleChanged, &app, [&](bool shown) { if (!shown) QTimer::singleShot(0, &app, closeEditor); });
                     }
