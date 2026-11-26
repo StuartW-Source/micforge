@@ -47,6 +47,48 @@ Flickable {
 
         Card {
             Layout.fillWidth: true
+            title: "Keyboard shortcuts in any app"
+            subtitle: "Mute or push-to-talk while you're in a game or another window. Your desktop asks you to confirm the keys the first time."
+            SettingRow {
+                title: "Use system-wide shortcuts"
+                sub: controller.shortcutsAvailable ? "Status: " + controller.shortcutsStatus : controller.shortcutsStatus
+                checked: controller.shortcutsEnabled
+                enabledRow: controller.shortcutsAvailable && !controller.safeMode
+                onToggled: (on) => controller.shortcutsEnabled = on
+            }
+            InfoRow {
+                visible: controller.shortcutsEnabled
+                label: "Mute / unmute"
+                value: controller.muteKey !== "" ? controller.muteKey : "not assigned"
+            }
+            InfoRow {
+                visible: controller.shortcutsEnabled
+                label: "Push to talk"
+                value: controller.pushToTalkKey !== "" ? controller.pushToTalkKey + " (hold)" : "not assigned"
+            }
+            SettingRow {
+                visible: controller.shortcutsEnabled
+                title: "Push to talk"
+                sub: "Your mic stays muted except while you hold the push-to-talk key. MicForge starts muted while this is on."
+                checked: controller.pushToTalk
+                onToggled: (on) => controller.pushToTalk = on
+            }
+            PillButton {
+                visible: controller.shortcutsEnabled
+                text: "Change keys…"
+                implicitHeight: Theme.controlHeightSm
+                onClicked: controller.configureShortcuts()
+            }
+            Text {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: Theme.textFaint; font.pixelSize: Theme.fsSmall
+                text: "Inside MicForge: Ctrl+M mutes, Ctrl+Z undoes, Ctrl+1 to Ctrl+8 switch pages."
+            }
+        }
+
+        Card {
+            Layout.fillWidth: true
             title: "Startup"
             SettingRow {
                 title: "Start MicForge when I log in"

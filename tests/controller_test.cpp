@@ -12,6 +12,17 @@
 
 #include <cstdio>
 
+// Stand-in for the desktop portal: records what MicForge asks for and lets the test press keys.
+struct FakeShortcuts : mf::IGlobalShortcuts {
+    int binds = 0;
+    QStringList ids;
+    void bind(const QVector<Shortcut> &s) override { ++binds; ids.clear(); for (const auto &x : s) ids << x.id; }
+    bool available() const override { return true; }
+    QString status() const override { return "Ready."; }
+    QMap<QString, QString> triggers() const override { return {{"mute", "Ctrl+Alt+M"}}; }
+};
+static FakeShortcuts *fake = nullptr;
+
 static int failures = 0;
 static void check(bool ok, const char *what) {
     std::printf("[%s] %s\n", ok ? " OK " : "FAIL", what);
@@ -28,6 +39,8 @@ int main(int argc, char **argv) {
     QGuiApplication app(argc, argv);
     app.setOrganizationName("MicForge");
     app.setApplicationName("MicForgeControllerTest");
+
+    mf::IGlobalShortcuts::factoryOverride() = [] { auto f = std::make_unique<FakeShortcuts>(); fake = f.get(); return f; };
 
     StartupInfo info;
     info.backend = {"micforge_ctltest", "MicForge controller test (ignore)"};
@@ -87,6 +100,26 @@ int main(int argc, char **argv) {
         junk.write("{ not a preset");
     }
     check(!c.importPreset(QUrl::fromLocalFile(home.filePath("junk.json"))).startsWith("Imported"), "a bad file is refused");
+
+    // ---- global shortcuts and push-to-talk (fake desktop portal)
+    check(fake && fake->binds == 0, "shortcuts: nothing is bound until switched on (no desktop dialog)");
+    c.setShortcutsEnabled(true);
+    check(fake->binds == 1 && fake->ids.contains("mute") && fake->ids.contains("push-to-talk"), "shortcuts: mute and push-to-talk requested");
+    check(c.muteKey() == "Ctrl+Alt+M", "shortcuts: the desktop's key is shown");
+    fake->onActivated("mute");
+    check(c.muted(), "mute shortcut mutes");
+    fake->onActivated("mute");
+    check(!c.muted(), "...and unmutes");
+    c.setPushToTalk(true);
+    check(c.muted(), "push-to-talk: silent until the key is held");
+    fake->onActivated("push-to-talk");
+    check(!c.muted(), "push-to-talk: key held -> live");
+    fake->onDeactivated("push-to-talk");
+    check(c.muted(), "push-to-talk: key released -> silent");
+    c.setShortcutsEnabled(false);
+    check(!c.muted(), "turning shortcuts off never leaves you stuck muted");
+    fake->onActivated("push-to-talk");
+    c.setPushToTalk(false);
 
     std::printf("\ncontroller tests: %s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;

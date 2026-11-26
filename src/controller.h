@@ -3,6 +3,7 @@
 #include "audio/audiobackend.h"
 #include "audio/audiocore.h"
 #include "platform/autostart.h"
+#include "platform/globalshortcuts.h"
 #include "separation.h"
 #include "pluginmanager.h"
 #include "diagnostics.h"
@@ -47,6 +48,13 @@ class Controller : public QObject {
     Q_PROPERTY(QString presetNotice READ presetNotice NOTIFY presetsChanged)
     // Undo/redo of sound settings ("" when there's nothing to undo/redo).
     Q_PROPERTY(QString undoText READ undoText NOTIFY undoChanged)
+    // System-wide shortcuts (mute, push-to-talk) through the desktop.
+    Q_PROPERTY(bool shortcutsAvailable READ shortcutsAvailable NOTIFY shortcutsChanged)
+    Q_PROPERTY(bool shortcutsEnabled READ shortcutsEnabled WRITE setShortcutsEnabled NOTIFY shortcutsChanged)
+    Q_PROPERTY(bool pushToTalk READ pushToTalk WRITE setPushToTalk NOTIFY shortcutsChanged)
+    Q_PROPERTY(QString shortcutsStatus READ shortcutsStatus NOTIFY shortcutsChanged)
+    Q_PROPERTY(QString muteKey READ muteKey NOTIFY shortcutsChanged)
+    Q_PROPERTY(QString pushToTalkKey READ pushToTalkKey NOTIFY shortcutsChanged)
     Q_PROPERTY(QString redoText READ redoText NOTIFY undoChanged)
     Q_PROPERTY(QVariantList micProfiles READ micProfiles NOTIFY profileNoticeChanged)
 
@@ -121,6 +129,15 @@ public:
     QString presetNotice() const { return m_presetNotice; }
     QString undoText() const { return m_undo.undoLabel(); }
     QString redoText() const { return m_undo.redoLabel(); }
+    bool shortcutsAvailable() const { return m_shortcuts && m_shortcuts->available(); }
+    bool shortcutsEnabled() const { return m_shortcutsEnabled; }
+    void setShortcutsEnabled(bool on);
+    bool pushToTalk() const { return m_pushToTalk; }
+    void setPushToTalk(bool on);
+    QString shortcutsStatus() const;
+    QString muteKey() const { return m_shortcuts ? m_shortcuts->triggers().value("mute") : QString(); }
+    QString pushToTalkKey() const { return m_shortcuts ? m_shortcuts->triggers().value("push-to-talk") : QString(); }
+    Q_INVOKABLE void configureShortcuts() { if (m_shortcuts) m_shortcuts->configure(); }
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
     Q_INVOKABLE void dismissPresetNotice() { m_presetNotice.clear(); emit presetsChanged(); }
@@ -206,6 +223,7 @@ signals:
     void showWelcomeChanged();
     void themeModeChanged();
     void undoChanged();
+    void shortcutsChanged();
     void profileNoticeChanged();
     void presetsChanged();
     void calibChanged();
@@ -242,6 +260,9 @@ private:
     CalibrationProfiles m_profiles;
     QString m_profileNotice;
     QString m_presetNotice;
+    std::unique_ptr<mf::IGlobalShortcuts> m_shortcuts;
+    bool m_shortcutsEnabled = false, m_pushToTalk = false;
+    void bindShortcuts();
     UndoStack m_undo;
     std::array<double, mf::PARAM_COUNT> m_shadow{}; // last value applied, per parameter (for undo)
     bool m_recordUndo = false, m_applyingUndo = false;

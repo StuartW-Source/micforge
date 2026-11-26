@@ -148,6 +148,23 @@ Controller::Controller(const StartupInfo &startup, QObject *parent)
     m_meterTimer.setInterval(33);
     connect(&m_meterTimer, &QTimer::timeout, this, &Controller::pollMeters);
     m_meterTimer.start();
+
+    // System-wide shortcuts. Probing the desktop is silent; binding (which may ask the user) only happens
+    // once they've switched shortcuts on.
+    m_shortcutsEnabled = s.value("shortcuts/enabled", false).toBool();
+    m_pushToTalk = s.value("shortcuts/pushToTalk", false).toBool();
+    m_shortcuts = createGlobalShortcuts();
+    m_shortcuts->onChanged = [this] { emit shortcutsChanged(); };
+    m_shortcuts->onActivated = [this](const QString &id) {
+        if (id == "mute") toggleMute();
+        else if (id == "push-to-talk" && m_pushToTalk) setMuted(false);
+    };
+    m_shortcuts->onDeactivated = [this](const QString &id) {
+        if (id == "push-to-talk" && m_pushToTalk) setMuted(true);
+    };
+    if (m_shortcutsEnabled && !m_startup.safeMode) bindShortcuts();
+    if (m_pushToTalk && m_shortcutsEnabled) setMuted(true); // push-to-talk: silent until the key is held
+
     // From here on, every settings change can be undone.
     for (int i = 0; i < PARAM_COUNT; ++i) m_shadow[size_t(i)] = m_params.value(kParams[i].key).toDouble();
     m_clock.start();
@@ -401,6 +418,36 @@ QVariantList Controller::micProfiles() const {
 void Controller::dismissProfileNotice() {
     m_profileNotice.clear();
     emit profileNoticeChanged();
+}
+
+// ---------------------------------------------------------------- global shortcuts
+
+void Controller::bindShortcuts() {
+    m_shortcuts->bind({{"mute", tr("Mute or unmute MicForge"), "CTRL+ALT+M"},
+                       {"push-to-talk", tr("Push to talk (hold to speak through MicForge)"), ""}});
+}
+
+void Controller::setShortcutsEnabled(bool on) {
+    if (on == m_shortcutsEnabled) return;
+    m_shortcutsEnabled = on;
+    if (!m_startup.safeMode) QSettings().setValue("shortcuts/enabled", on);
+    if (on) bindShortcuts();
+    else if (m_pushToTalk) setMuted(false); // shortcuts off: push-to-talk can't work, so don't stay muted
+    emit shortcutsChanged();
+}
+
+void Controller::setPushToTalk(bool on) {
+    if (on == m_pushToTalk) return;
+    m_pushToTalk = on;
+    if (!m_startup.safeMode) QSettings().setValue("shortcuts/pushToTalk", on);
+    if (m_shortcutsEnabled) setMuted(on);
+    emit shortcutsChanged();
+}
+
+QString Controller::shortcutsStatus() const {
+    if (!m_shortcuts) return {};
+    if (!m_shortcuts->available()) return m_shortcuts->status();
+    return m_shortcutsEnabled ? m_shortcuts->status() : tr("Off.");
 }
 
 void Controller::undo() {

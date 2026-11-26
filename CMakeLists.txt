@@ -33,7 +33,7 @@ if(NOT MICFORGE_WITH_VST3)
     message(FATAL_ERROR "Building without VST3 isn't supported yet.")
 endif()
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Qml Quick QuickControls2 Network Concurrent)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Qml Quick QuickControls2 Network Concurrent DBus)
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
@@ -96,7 +96,7 @@ add_executable(micforge
     src/audio/audiocore.cpp src/audio/pipewirebackend.cpp
     src/plugins/plugins.cpp src/plugins/vst3host.cpp
     src/optional/rnnoise_api.cpp
-    src/platform/autostart_xdg.cpp
+    src/platform/autostart_xdg.cpp src/platform/globalshortcuts_portal.cpp
     resources.qrc)
 if(MICFORGE_WITH_LV2)
     target_sources(micforge PRIVATE src/plugins/lv2host.cpp src/optional/lilv_api.cpp)
@@ -107,7 +107,7 @@ endif()
 target_include_directories(micforge PRIVATE src)
 target_compile_definitions(micforge PRIVATE MICFORGE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(micforge PRIVATE
-    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Concurrent
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Concurrent Qt6::DBus
     PkgConfig::PIPEWIRE vst3host Threads::Threads ${CMAKE_DL_LIBS})
 
 include(GNUInstallDirs)
@@ -160,7 +160,7 @@ if(MICFORGE_BUILD_TESTS)
     target_include_directories(controller_test PRIVATE src ${LILV_INCLUDE_DIRS})
     target_compile_definitions(controller_test PRIVATE MICFORGE_VERSION="${PROJECT_VERSION}")
     target_link_libraries(controller_test PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Concurrent
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Concurrent Qt6::DBus
         PkgConfig::PIPEWIRE vst3host Threads::Threads ${CMAKE_DL_LIBS})
     add_test(NAME controller COMMAND controller_test)
 
