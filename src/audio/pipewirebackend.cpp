@@ -261,6 +261,10 @@ void PipeWireBackend::setInputDevice(const std::string &nodeName) {
     pw_thread_loop_unlock(loop);
 }
 
+std::string PipeWireBackend::version() const {
+    return std::string("libpipewire ") + pw_get_library_version();
+}
+
 void PipeWireBackend::setMonitor(bool on) {
     m_core.setMonitorEnabled(on);
     if (!loop || !core) return;
@@ -382,6 +386,14 @@ void PipeWireBackend::processCapture() {
         m_core.processInput(in, 2, size / uint32_t(sizeof(float) * 2));
     }
     pw_stream_queue_buffer(capture, b);
+    // Graph rate and input latency for Diagnostics (pw_stream_get_time_n is real-time safe).
+    if ((m_core.stats.blocks.load(std::memory_order_relaxed) & 63) == 1) {
+        pw_time t{};
+        if (pw_stream_get_time_n(capture, &t, sizeof(t)) == 0 && t.rate.denom > 0) {
+            m_core.stats.graphRate.store(t.rate.denom / std::max<uint32_t>(1, t.rate.num), std::memory_order_relaxed);
+            m_core.stats.inputLatencyMs.store(float(1000.0 * double(t.delay) * t.rate.num / t.rate.denom), std::memory_order_relaxed);
+        }
+    }
 }
 
 namespace {
@@ -401,7 +413,14 @@ template <typename Fill> void fillOutput(pw_stream *stream, Fill fill) {
 }
 } // namespace
 
-void PipeWireBackend::processVirtualMic() { fillOutput(vmic, [this](float *o, uint32_t n) { m_core.readVirtualMic(o, n); }); }
+void PipeWireBackend::processVirtualMic() {
+    fillOutput(vmic, [this](float *o, uint32_t n) { m_core.readVirtualMic(o, n); });
+    if ((++m_vmicCycles & 63) == 1) {
+        pw_time t{};
+        if (pw_stream_get_time_n(vmic, &t, sizeof(t)) == 0 && t.rate.denom > 0)
+            m_core.stats.outputLatencyMs.store(float(1000.0 * double(t.delay) * t.rate.num / t.rate.denom), std::memory_order_relaxed);
+    }
+}
 void PipeWireBackend::processMonitor() { fillOutput(monitor, [this](float *o, uint32_t n) { m_core.readMonitor(o, n); }); }
 
 // ---------------------------------------------------------------- state / registry

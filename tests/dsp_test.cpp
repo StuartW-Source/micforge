@@ -1,6 +1,7 @@
 // Offline sanity test for the voice chain: feeds synthetic signals and checks behaviour.
 // Build: g++ -std=c++20 -O2 -Isrc tests/dsp_test.cpp src/optional/rnnoise_api.cpp -ldl -o dsp_test && ./dsp_test
 #include "dsp.h"
+#include "levels.h"
 #include "separation.h"
 
 #include <cstdio>
@@ -364,6 +365,25 @@ int main() {
         c.process(in.data() + 19200, 2, out.data(), 4800, p, m);
         float pk = 0; for (int i = 0; i < 4800; ++i) pk = std::max(pk, std::fabs(out[i]));
         check(pk < 1e-5f, "mute: also silences bypass (raw mic never sent)", linToDb(pk));
+    }
+    { // Level analysis (mic test / Setup): speech vs noise floor, clipping, envelope.
+        std::vector<float> x(48000 * 4);
+        unsigned seed = 1;
+        auto noise = [&] { seed = seed * 1664525u + 1013904223u; return (float(seed >> 8) / float(1u << 24) - 0.5f) * 2.0f; };
+        for (size_t i = 0; i < x.size(); ++i) {
+            const bool talking = (i / 24000) % 2 == 1;                         // alternate 0.5 s talk / quiet
+            x[i] = 0.001f * noise() + (talking ? 0.3f * std::sin(2 * 3.14159265f * 200 * float(i) / 48000) : 0.0f);
+        }
+        auto s = analyseLevels(x.data(), x.size(), 48000);
+        check(s.valid && std::fabs(s.speechDb - (-13.5f)) < 1.5f, "levels: speech level of a -10.5 dBFS-peak tone", s.speechDb);
+        check(s.noiseFloorDb < -60 && s.noiseFloorDb > -70, "levels: noise floor of -65 dBFS noise", s.noiseFloorDb);
+        check(s.dynamicRangeDb > 45, "levels: dynamic range = speech - floor", s.dynamicRangeDb);
+        check(s.clipped == 0, "levels: no clipping reported for a clean take", double(s.clipped));
+        for (size_t i = 0; i < 100; ++i) x[i] = 1.0f;
+        check(analyseLevels(x.data(), x.size(), 48000).clipped == 100, "levels: counts full-scale samples", 100);
+        auto env = peakEnvelope(x.data(), x.size(), 400);
+        check(env.size() == 400 && env[0] == 1.0f && env[399] > 0.25f, "levels: waveform envelope", env[399]);
+        check(!analyseLevels(x.data(), 1000, 48000).valid, "levels: too-short take is rejected", 0);
     }
     std::printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;

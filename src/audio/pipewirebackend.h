@@ -36,6 +36,7 @@ public:
     bool virtualMicInUse() const override { return m_virtualMicInUse; }
     void setInputDevice(const std::string &id) override;
     void setMonitor(bool on) override;
+    std::string version() const override;
     std::string defaultInputDevice() const override;
 
     // --- internal, used by the C callbacks ---
@@ -75,6 +76,7 @@ private:
     std::unique_ptr<spa_hook> coreHook, registryHook, metadataHook, captureHook, vmicHook, monitorHook;
 
     std::atomic<bool> m_connected{false}, m_captureRunning{false}, m_virtualMicInUse{false};
+    uint64_t m_vmicCycles = 0; // audio thread only
     mutable std::mutex m_mutex; // guards m_error and m_defaultInput (PipeWire thread <-> UI; never the RT callbacks)
     std::string m_error, m_defaultInput;
 

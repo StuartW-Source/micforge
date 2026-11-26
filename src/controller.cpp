@@ -129,6 +129,9 @@ Controller::Controller(const StartupInfo &startup, QObject *parent)
 
     // Third-party plugins: restore the saved chain now (not in safe mode), discover what's installed in the background.
     m_plugins = new PluginManager(&m_core.rack, AudioCore::kRate, this);
+    m_diagnostics = new Diagnostics(this, m_core, *m_backend, m_startup.logPath, this);
+    m_micTest = new MicTestSession(m_core, this);
+    m_micTest->onNeedMonitorStream = [this](bool on) { m_testPlayback = on; updateMonitorStream(); };
     m_plugins->setReadOnly(m_startup.safeMode);
     if (!m_startup.safeMode) m_plugins->restore();
     QTimer::singleShot(1200, m_plugins, [this] { m_plugins->rescan(); });
@@ -174,6 +177,10 @@ Controller::~Controller() {
     saveNow();
     // Explicit shutdown order: stop the audio thread, then destroy plugins (they live in m_core.rack,
     // which is destroyed before Qt would delete child objects), then everything else.
+    delete m_micTest;
+    m_micTest = nullptr;
+    delete m_diagnostics;
+    m_diagnostics = nullptr;
     m_backend.reset();
     delete m_plugins;
     m_plugins = nullptr;
@@ -287,9 +294,12 @@ void Controller::setCurrentSource(const QString &name) {
 void Controller::setMonitor(bool on) {
     if (on == m_monitor) return;
     m_monitor = on;
-    m_backend->setMonitor(on);
+    m_core.setLiveMonitor(on);
+    updateMonitorStream();
     emit monitorChanged();
 }
+
+void Controller::updateMonitorStream() { m_backend->setMonitor(m_monitor || m_testPlayback); }
 
 void Controller::setShowWelcome(bool on) {
     if (on == m_showWelcome) return;

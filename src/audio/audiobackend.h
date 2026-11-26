@@ -39,6 +39,7 @@ public:
     // The microphone to process. Never silently replaced by another device if it disappears.
     virtual void setInputDevice(const std::string &id) = 0;
     virtual void setMonitor(bool on) = 0;
+    virtual std::string version() const { return {}; } // for diagnostics, e.g. "PipeWire 1.6.11"
     virtual std::string defaultInputDevice() const = 0; // system default microphone, "" if unknown
 
     // Callbacks are invoked on backend threads; receivers must marshal to their own thread.

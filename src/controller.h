@@ -5,6 +5,8 @@
 #include "platform/autostart.h"
 #include "separation.h"
 #include "pluginmanager.h"
+#include "diagnostics.h"
+#include "mictest.h"
 #include "optional/rnnoise_api.h"
 
 #include <QFutureWatcher>
@@ -30,6 +32,8 @@ class Controller : public QObject {
     Q_OBJECT
     Q_PROPERTY(QQmlPropertyMap *params READ params CONSTANT)
     Q_PROPERTY(PluginManager *plugins READ plugins CONSTANT)
+    Q_PROPERTY(Diagnostics *diagnostics READ diagnostics CONSTANT)
+    Q_PROPERTY(MicTestSession *micTest READ micTest CONSTANT)
 
     Q_PROPERTY(QVariantList sources READ sources NOTIFY sourcesChanged)
     Q_PROPERTY(QString currentSource READ currentSource WRITE setCurrentSource NOTIFY currentSourceChanged)
@@ -90,6 +94,8 @@ public:
 
     QQmlPropertyMap *params() { return &m_params; }
     PluginManager *plugins() { return m_plugins; }
+    Diagnostics *diagnostics() { return m_diagnostics; }
+    MicTestSession *micTest() { return m_micTest; }
     QVariantList sources() const { return m_sources; }
     QString currentSource() const { return m_currentSource; }
     void setCurrentSource(const QString &name);
@@ -192,6 +198,10 @@ private:
     std::unique_ptr<mf::IAudioBackend> m_backend; // OS audio system (PipeWire on Linux)
     QQmlPropertyMap m_params;
     PluginManager *m_plugins = nullptr;
+    Diagnostics *m_diagnostics = nullptr;
+    MicTestSession *m_micTest = nullptr;
+    bool m_testPlayback = false;          // mic-test playback needs the monitor output
+    void updateMonitorStream();
     QTimer m_meterTimer, m_saveTimer;
     QVariantList m_sources;
     QString m_currentSource;

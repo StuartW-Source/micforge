@@ -92,7 +92,7 @@ target_link_libraries(vst3host PUBLIC ${CMAKE_DL_LIBS})
 
 # ---------------------------------------------------------------- application
 add_executable(micforge
-    src/main.cpp src/startup.cpp src/controller.cpp src/pluginmanager.cpp
+    src/main.cpp src/startup.cpp src/controller.cpp src/pluginmanager.cpp src/diagnostics.cpp src/mictest.cpp
     src/audio/audiocore.cpp src/audio/pipewirebackend.cpp
     src/plugins/plugins.cpp src/plugins/vst3host.cpp
     src/optional/rnnoise_api.cpp
@@ -127,6 +127,11 @@ if(MICFORGE_BUILD_TESTS)
     target_include_directories(dsp_test PRIVATE src)
     target_link_libraries(dsp_test PRIVATE ${CMAKE_DL_LIBS})
     add_test(NAME dsp COMMAND dsp_test)
+
+    add_executable(audiocore_test tests/audiocore_test.cpp src/audio/audiocore.cpp src/optional/rnnoise_api.cpp)
+    target_include_directories(audiocore_test PRIVATE src)
+    target_link_libraries(audiocore_test PRIVATE Qt6::Core Threads::Threads ${CMAKE_DL_LIBS})
+    add_test(NAME audiocore COMMAND audiocore_test)
 
     add_executable(autostart_test tests/autostart_test.cpp src/platform/autostart_xdg.cpp)
     target_include_directories(autostart_test PRIVATE src)
