@@ -53,9 +53,6 @@ bool isPersonalKey(const QString &k) {
 
 double roundHalf(double v) { return std::round(v * 2.0) / 2.0; }
 
-QString autostartPath() {
-    return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + "/autostart/micforge.desktop";
-}
 
 constexpr int kCalibVersion = 2; // bump when the analysis changes in a way that should re-tune saved setups
 
@@ -63,7 +60,8 @@ QString fmtHz(double v) { return v >= 1000 ? QString::number(v / 1000, 'f', 1) +
 
 } // namespace
 
-Controller::Controller(const StartupInfo &startup, QObject *parent) : QObject(parent), m_startup(startup) {
+Controller::Controller(const StartupInfo &startup, QObject *parent)
+    : QObject(parent), m_startup(startup), m_autostart(createAutostart()) {
     QSettings s;
     if (m_startup.safeMode)
         qWarning("safe mode: using default sound settings and no plugins; nothing will be saved (%s)",
@@ -131,7 +129,7 @@ Controller::Controller(const StartupInfo &startup, QObject *parent) : QObject(pa
     if (!m_startup.safeMode) m_plugins->restore();
     QTimer::singleShot(1200, m_plugins, [this] { m_plugins->rescan(); });
 
-    if (autostart() && !m_startup.safeMode && !qEnvironmentVariableIsSet("MICFORGE_TEST")) refreshAutostartEntry();
+    if (!m_startup.safeMode && !qEnvironmentVariableIsSet("MICFORGE_TEST")) m_autostart->refresh(autostartHidden());
 
     m_meterTimer.setInterval(33);
     connect(&m_meterTimer, &QTimer::timeout, this, &Controller::pollMeters);
@@ -385,35 +383,21 @@ void Controller::deletePreset(const QString &name) {
 
 // ---------------------------------------------------------------- autostart
 
-bool Controller::autostart() const { return QFile::exists(autostartPath()); }
+bool Controller::autostart() const { return m_autostart->enabled(); }
 
 bool Controller::autostartHidden() const { return QSettings().value("autostartHidden", true).toBool(); }
 
-// (Re)write the login entry so it always points at the copy of MicForge that's running now
-// (e.g. /usr/bin/micforge from the AUR, or ~/.local/bin/micforge from install.sh).
-void Controller::writeAutostartEntry() {
-    QDir().mkpath(QFileInfo(autostartPath()).path());
-    QFile f(autostartPath());
-    if (!f.open(QIODevice::WriteOnly)) return;
-    f.write(QString("[Desktop Entry]\nType=Application\nName=MicForge\n"
-                    "Comment=Microphone processing for voice chat\n"
-                    "Exec=\"%1\"%2\nIcon=micforge\n"
-                    "X-GNOME-Autostart-enabled=true\nX-KDE-autostart-phase=2\n")
-                .arg(QCoreApplication::applicationFilePath(), autostartHidden() ? " --minimized" : "")
-                .toUtf8());
-}
-
 void Controller::setAutostart(bool on) {
     if (on == autostart()) return;
-    if (on) writeAutostartEntry();
-    else QFile::remove(autostartPath());
+    m_autostart->setEnabled(on, autostartHidden());
+    qInfo("autostart: %s (%s)", on ? "enabled" : "disabled", qPrintable(m_autostart->describe()));
     emit autostartChanged();
 }
 
 void Controller::setAutostartHidden(bool hidden) {
     if (hidden == autostartHidden()) return;
     QSettings().setValue("autostartHidden", hidden);
-    if (autostart()) writeAutostartEntry();
+    if (autostart()) m_autostart->setEnabled(true, hidden);
     emit autostartChanged();
 }
 
@@ -866,18 +850,3 @@ void Controller::openLogFolder() { QDesktopServices::openUrl(QUrl::fromLocalFile
 
 void Controller::requestRestart(bool safeMode) { emit restartRequested(safeMode); }
 
-// The login entry must point at an installed MicForge. Only rewrite it when it points at a binary that no
-// longer exists, or when this binary is itself an installed copy (so a development build never hijacks it).
-void Controller::refreshAutostartEntry() {
-    const QString self = QCoreApplication::applicationFilePath();
-    const bool installed = self.startsWith("/usr/") || self.startsWith(QDir::homePath() + "/.local/bin/");
-    QString current;
-    if (QFile f(autostartPath()); f.open(QIODevice::ReadOnly))
-        for (const QByteArray &line : f.readAll().split('\n'))
-            if (line.startsWith("Exec=")) current = QString::fromUtf8(line.mid(5)).section('"', 1, 1);
-    if (current == self) return;
-    if (installed || !QFileInfo::exists(current)) {
-        qInfo("autostart: login entry now points at %s (was %s)", qPrintable(self), qPrintable(current));
-        writeAutostartEntry();
-    }
-}

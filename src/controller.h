@@ -2,6 +2,7 @@
 
 #include "audio/audiobackend.h"
 #include "audio/audiocore.h"
+#include "platform/autostart.h"
 #include "separation.h"
 #include "pluginmanager.h"
 #include "optional/rnnoise_api.h"
@@ -156,8 +157,6 @@ signals:
 
 private:
     void pollMeters();
-    void writeAutostartEntry();
-    void refreshAutostartEntry();
     void startEngine();
     void scheduleEngineRetry(bool immediate);
     void onParamEdited(const QString &key, const QVariant &value);
@@ -181,6 +180,7 @@ private:
     QString m_currentSource;
     QString m_currentPreset;
     StartupInfo m_startup;
+    std::unique_ptr<mf::IAutostart> m_autostart;
     QStringList m_unavailable;
     QTimer m_engineRetry;
     int m_engineAttempts = 0;

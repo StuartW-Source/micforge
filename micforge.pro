@@ -21,12 +21,12 @@ INCLUDEPATH += $$VST3SDK src
 SOURCES += \
     src/main.cpp src/startup.cpp src/controller.cpp src/audio/audiocore.cpp src/audio/pipewirebackend.cpp src/pluginmanager.cpp \
     src/plugins/plugins.cpp src/plugins/lv2host.cpp src/plugins/vst3host.cpp \
-    src/optional/rnnoise_api.cpp src/optional/lilv_api.cpp
+    src/optional/rnnoise_api.cpp src/optional/lilv_api.cpp src/platform/autostart_xdg.cpp
 
 HEADERS += \
     src/params.h src/dsp.h src/effects.h src/separation.h src/audio/audiocore.h src/audio/audiobackend.h src/audio/pipewirebackend.h src/controller.h \
     src/pluginmanager.h src/plugins/plugins.h src/startup.h \
-    src/platform/dynlib.h src/optional/rnnoise_api.h src/optional/lilv_api.h
+    src/platform/dynlib.h src/platform/autostart.h src/optional/rnnoise_api.h src/optional/lilv_api.h
 
 # Only the SDK pieces a host needs (no GUI toolkit, no plugin-side code).
 SOURCES += \
