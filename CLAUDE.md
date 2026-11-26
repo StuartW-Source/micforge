@@ -28,7 +28,8 @@ Plugin-host tests and the recordings analyser are described in `docs/TESTING.md`
 - **Never disturb the user's running MicForge** (it may be live in a call). Use the test instance:
   `MICFORGE_TEST=1` gives separate settings, lock, log, recordings and virtual mic. Add
   `QT_QPA_PLATFORM=offscreen` for headless runs. Don't kill/restart the real instance without asking.
-- **Screenshots**: use `MICFORGE_TEST=1 MICFORGE_PAGE=<stage> MICFORGE_SNAPSHOT=<png>`
+- **Screenshots**: use `MICFORGE_TEST=1 MICFORGE_PAGE=<page|stage> MICFORGE_SNAPSHOT=<png>` (optional
+  `MICFORGE_THEME=dark|light`, `MICFORGE_SIZE=WxH`)
   (captures MicForge's own window only). Never use desktop screenshot tools (they captured a private window once).
 - **Never restart the system PipeWire** for testing; `tests/reconnect_test.sh` runs a private daemon.
 - Settings (`~/.config/MicForge/MicForge.conf`) and calibration recordings
@@ -44,12 +45,14 @@ Plugin-host tests and the recordings analyser are described in `docs/TESTING.md`
 | `src/dsp.h`, `src/effects.h` | Real-time processing chain (header-only, no Qt, platform-independent) |
 | `src/separation.h` | Voice-separation analysis used by Setup (platform-independent) |
 | `src/params.h` | Every parameter: enum + table (key, default, min, max) — single source of truth |
-| `src/audioengine.*` | PipeWire backend: capture, virtual mic, monitor, reconnection |
-| `src/controller.*` | QML-facing state: params, presets, calibration, autostart, engine lifecycle |
+| `src/audio/audiocore.*` | Platform-independent processing core: params, meters, chain, plugin rack, rings |
+| `src/audio/audiobackend.h`, `pipewirebackend.*` | `IAudioBackend` + PipeWire implementation: capture, virtual mic, monitor, default device, reconnection |
+| `src/platform/` | `IAutostart` (XDG), run-time library loading (`dynlib.h`) |
+| `src/controller.*` | QML-facing state: params, presets, calibration, app state/mute, engine lifecycle |
 | `src/startup.*` | Logging, single instance, crash-loop guard / safe mode, settings backups, signals |
 | `src/optional/` | Run-time loading of optional libraries (rnnoise, lilv) via `src/platform/dynlib.h` |
 | `src/plugins/`, `src/pluginmanager.*` | VST3 + LV2 hosting, plugin chain management |
-| `qml/` | UI. `Theme.qml` holds colours/presets; `Stage*.qml` are effect panels |
+| `qml/` | UI. `Main.qml` = header + sidebar + pages (`*Page.qml`); `Stage*.qml` are effect panels; `Theme.qml` holds design tokens and effect presets |
 
 ## Real-time rules (audio thread = PipeWire `process` callbacks, `VoiceChain::process`, plugin `process`)
 
@@ -58,5 +61,8 @@ No allocation, locks, file/console I/O, Qt signals or blocking calls. UI → aud
 
 ## Conventions
 
-C++20, Qt 6, qmake (CMake migration planned, see ROADMAP). Plain-English, neutral UI wording (no
+C++20, Qt 6, qmake (verified) with a CMake build alongside (`CMakeLists.txt`, keep both source lists in
+sync until qmake is retired). QML: take every colour, spacing and font size from `Theme` (no hex
+literals); use `MfComboBox`/`MfTextField`/`MfMenu*` rather than raw Controls; make custom controls
+focusable (`activeFocusOnTab`, Space/Enter, `FocusRing`, `Accessible.name`). Plain-English, neutral UI wording (no
 assumptions about who else is in the room). Keep DSP free of Qt/PipeWire types.

@@ -108,16 +108,23 @@ whether a USB mic, headset, or one channel of a multi-input audio interface.
 - R4.1 Plain-English names, summaries and help for every control. Rarely needed controls hide under
   "Advanced". All wording is neutral and makes no assumptions about the user or the people around them.
 - R4.2 Live visual feedback for every stage: meters, activity lights and gain reduction.
-- R4.3 One window that scales to many effects:
-  - a **chain strip** for an overview,
-  - a **detail panel** for editing,
-  - an always-visible **Live** column with input/output meters, gate state and whether an app is
-    using the virtual mic.
+- R4.3 One window organised into pages (Overview, Voice Isolation, Effects, Audio Devices, Presets,
+  Settings; Diagnostics in Phase 3):
+  - the **Overview** answers "is it working and what are apps hearing?" at a glance (state, mic,
+    virtual mic in use, levels, voice isolation, quick controls),
+  - the **Effects** page keeps a **chain strip** for the processing order, a **detail panel** for
+    editing and a **Live** column (meters, gate state, whether an app is using the virtual mic),
+  - the window stays usable from 860×600 up to large screens.
 - R4.4 **Compare** (hear the raw mic) and **Listen** (hear yourself in headphones).
 - R4.5 The user chooses which microphone and which interface channel is processed.
 - R4.6 Settings persist automatically. Sound presets can be saved, and built-in presets never undo
   the user's setup or remove effects they've added.
 - R4.7 Runs in the system tray. Optional start at login, optionally hidden.
+- R4.8 **Mute** from the window, the tray and a keyboard shortcut. Mute is never saved, so MicForge never
+  starts muted. The current state (processing, muted, bypassed, waiting for the mic, disconnected) is
+  always visible in the window and the tray.
+- R4.9 Consistent look from shared design tokens; light, dark and follow-the-system themes; full keyboard
+  operation with a visible focus indicator; accessible names for controls; sharp at any display scale.
 
 ## R5. Technical
 

@@ -31,40 +31,29 @@ been implemented beyond Phase 1's small portable helpers. The interfaces below a
 | qmake | `micforge.pro` | CMake (works with MSVC, CI, and Linux) |
 | Rotating log location `~/.local/state` | `QStandardPaths::StateLocation` | Resolves to `%LOCALAPPDATA%` on Windows automatically |
 
-## Proposed seams (Phase 2, for approval)
+## Seams (implemented in Phase 2)
 
-Only abstractions the current code actually needs:
+Only the abstractions the code needs today:
 
-```cpp
-// Audio I/O provided by the OS. PipeWireBackend wraps today's AudioEngine; WasapiBackend comes later.
-class IAudioBackend {
-public:
-    struct Device { std::string id, name; int channels; };
-    virtual bool start() = 0;                         // connect; false = retry later
-    virtual void setInputDevice(const std::string &id, int channelMode) = 0;
-    virtual void setMonitor(bool on) = 0;
-    virtual std::string defaultInputDevice() = 0;
-    virtual BackendState state() const = 0;           // disconnected / connecting / running / error
-    std::function<void(std::vector<Device>)> onDevicesChanged;
-    std::function<void()> onStateChanged, onConnectionLost;
-    // The backend owns the RT thread and calls VoiceChain::process; the chain itself is shared.
-};
+- **`AudioCore`** (`src/audio/audiocore.*`): everything between the OS and the apps that isn't OS
+  specific: `Params`, `Meters`, `VoiceChain`, `Recorder`, `PluginRack`, and the lock-free rings that feed
+  the virtual mic and monitor. A Windows backend reuses it as is.
+- **`IAudioBackend`** (`src/audio/audiobackend.h`): `start()` (re-entrant; false = retry later),
+  `setInputDevice(id)`, `setMonitor(on)`, `defaultInputDevice()`, `connected()`, `inputRunning()`,
+  `virtualMicInUse()`, `error()`, plus callbacks `onDevicesChanged`, `onStateChanged`, `onConnectionLost`,
+  `onDefaultInputChanged`. `BackendConfig` names the endpoints (the test instance uses its own).
+  `PipeWireBackend` is the only implementation; the virtual microphone stays inside it because its
+  Windows shape depends on Phase 8 research.
+- **`IAutostart`** (`src/platform/autostart.h`): `enabled()`, `setEnabled(on, hidden)`, `refresh(hidden)`,
+  `describe()`. `XdgAutostart` on Linux; Windows will use `HKCU\...\Run`.
+- **Not added:** `IPlatformPaths` (`QStandardPaths` already gives correct locations on both platforms)
+  and a virtual-microphone interface (see above).
 
-class IAutostart { virtual bool enabled() = 0; virtual void setEnabled(bool, bool hidden) = 0; };
-```
-
-`VoiceChain`, `Params`, `Meters`, `Recorder` and `PluginRack` stay as they are. Each backend owns them the
-way `AudioEngine` does today. A virtual-microphone interface is **not** proposed yet: on Linux it's part
-of the PipeWire backend, and on Windows its shape depends on the Phase 8 research.
-
-**Benefits:** isolates the only large Linux-only component; makes a Windows backend additive.
-**Risks:** churn in the engine/controller boundary; mitigated by keeping `AudioEngine`'s behaviour and
-tests (`startup_test.sh`, `reconnect_test.sh`) unchanged.
-**Migration:** (1) CMake build producing identical binaries; (2) extract `IAudioBackend` with the PipeWire
-implementation, no behaviour change; (3) move device-ID and default-device logic out of `Controller`;
-(4) `IAutostart` with the XDG implementation.
+Verified after the extraction: start-up 9/9, reconnect 3/3, DSP, autostart 6/6.
 
 ## Build-time selection
 
-CMake options (proposed): `MICFORGE_BACKEND=pipewire|wasapi` (default by platform), `MICFORGE_WITH_LV2`
-(default ON on Linux, OFF on Windows), `MICFORGE_WITH_VST3` (ON). DSP tests build without Qt or a backend.
+CMake options (in `CMakeLists.txt`, not yet built on this machine): `MICFORGE_BACKEND=pipewire` (the only
+backend so far; `wasapi` planned), `MICFORGE_WITH_LV2` (default ON on Linux; OFF uses
+`src/plugins/lv2_disabled.cpp`), `MICFORGE_WITH_VST3` (ON), `MICFORGE_BUILD_TESTS`. The DSP test builds
+without Qt or a backend.

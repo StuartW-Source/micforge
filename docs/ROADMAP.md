@@ -1,7 +1,8 @@
 # MicForge roadmap
 
 Living document. Phases follow the development brief; each phase needs approval before it starts.
-Status: **Phase 1 complete (pending a real reboot/login confirmation by the user). Phase 2 awaiting approval.**
+Status: **Phase 1 complete (pending a real reboot/login confirmation by the user). Phase 2 complete on branch
+`phase2-architecture-ui` (CMake build not yet verified: cmake isn't installed). Phase 3 awaiting approval.**
 
 ---
 
@@ -106,19 +107,22 @@ Severity: 🔴 high, 🟠 medium, 🟢 low.
 
 ---
 
-## Proposed priorities for the remaining phases
+## Phase 2 — Cross-platform architecture, UI design system, polish ✅ (2026-11-26)
 
-### Phase 2 — Cross-platform architecture review, UI design system, polish *(needs approval)*
-1. **CMake build** alongside qmake, then retire qmake: required for MSVC, CI and Windows. Low risk, high value.
-2. **Platform seams** only where they pay off now (see `docs/CROSS_PLATFORM.md`): `IAudioBackend` (wrap
-   `AudioEngine`), `IAutostart`, `IPlatformPaths`. DSP/analysis stay untouched.
-3. **Split `Controller`** into `EngineService`, `CalibrationService`, `PresetStore`, `AutostartManager`.
-4. **Design system**: theme tokens (colour, spacing, type scale), light/dark/system themes, consistent
-   controls (replace Fusion widgets with themed ones), keyboard focus, high-DPI review with screenshots at
-   several window sizes.
-5. Information architecture: Overview / Voice Isolation / Effects / Devices / Presets / Diagnostics / Settings,
-   keeping the chain strip.
-6. Explicit state model (disconnected, connecting, processing, bypassed, **muted**, error) + mute everywhere.
+| Item | Result |
+|---|---|
+| CMake build alongside qmake | `CMakeLists.txt` written (options `MICFORGE_BACKEND`, `MICFORGE_WITH_LV2/VST3`, `MICFORGE_BUILD_TESTS`, ctest). **Not yet built**: cmake/ninja aren't installed (`sudo pacman -S cmake ninja`). qmake remains the verified build until then. |
+| Platform seams | `AudioCore` (platform-independent processing, rings, meters, plugin rack) + `IAudioBackend` / `PipeWireBackend`; `IAutostart` / `XdgAutostart`. Default-device tracking moved into the backend (PipeWire `default` metadata; no more `pactl`). `IPlatformPaths` **not** added: `QStandardPaths` already covers both platforms. |
+| Split `Controller` | Audio I/O, default device and autostart moved out. Calibration and presets stay in `Controller` for now: splitting them adds churn without enabling anything yet; revisit when Phase 3 (calibration) or Phase 5 (versioned presets) changes them. |
+| Mute + state model | `mute` parameter (10 ms fade, never saved/preset), `appState` = disconnected / connecting / no-input / muted / bypassed / processing, shown in the header, the tray (icon overlay + menu) and page notices. Ctrl+M. |
+| Design system | Semantic colour tokens with dark and light values, spacing/radius/type/control-size tokens in `Theme.qml`; System/Dark/Light setting. No QML file hard-codes colours. Themed ComboBox/TextField/Menu. Tab focus ring, Space/Enter, slider keys, accessible names. |
+| Information architecture | Sidebar: Overview, Voice Isolation, Effects (chain strip kept), Audio Devices, Presets, Settings (Ctrl+1..6). Diagnostics is Phase 3. |
+| Screenshot review | Test-instance snapshots of every page in both themes at 860×600, 1200×760, 1400×880 and 1920×1080; overflow and overlap problems found and fixed (see TESTING.md). |
+
+Not verified yet: keyboard focus traversal by hand (only code-reviewed), the System theme following a live
+desktop theme switch, fractional-scaling displays.
+
+## Proposed priorities for the remaining phases
 
 ### Phase 3 — Diagnostics, recording and calibration
 Diagnostics screen (engine, devices, rate/quantum, measured callback time, xruns, plugin errors, log
