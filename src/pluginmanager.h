@@ -44,6 +44,10 @@ public:
     Q_INVOKABLE bool savePluginPreset(int slot, const QString &name);
     Q_INVOKABLE bool loadPluginPreset(int slot, const QString &name);
     Q_INVOKABLE void deletePluginPreset(int slot, const QString &name);
+    // Run a plugin in its own process (a crash can't take MicForge down) or inside MicForge.
+    Q_INVOKABLE void setSeparate(int slot, bool separate);
+    // The plugin's own window (only for plugins running separately that have one).
+    Q_INVOKABLE void showEditor(int slot, bool show);
     QVariantList chain() const;
     int revision() const { return m_revision; }
     int maxPlugins() const { return mf::PluginRack::kSlots; }
@@ -84,7 +88,10 @@ private:
         mf::PluginInfo info;
         std::unique_ptr<mf::PluginInstance> inst;
         QString error;
+        QString notice;         // e.g. "restarted after it crashed"
         bool bypass = false;
+        bool separate = false;  // runs in its own process (crash-safe)
+        std::vector<qint64> crashes; // times (ms since epoch) of recent crashes
         QVariantMap saved; // parameter values by id, applied when (re)loaded
     };
     bool instantiate(Entry &e);
@@ -106,6 +113,8 @@ private:
     QStringList m_blocked;
     QTimer m_cpuTimer;
     QString presetFolder(const mf::PluginInfo &info) const;
+    void handleCrash(mf::PluginInstance *which, const QString &why);
+    void keepValues(Entry &e);
     bool m_forceScan = false;
     QString m_scanStatus;
     int m_revision = 0;

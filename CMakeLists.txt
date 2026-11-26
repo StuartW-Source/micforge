@@ -94,7 +94,7 @@ target_link_libraries(vst3host PUBLIC ${CMAKE_DL_LIBS})
 add_executable(micforge
     src/main.cpp src/startup.cpp src/controller.cpp src/pluginmanager.cpp src/diagnostics.cpp src/mictest.cpp src/calibprofiles.cpp src/detectorspectrum.cpp src/presetfile.cpp
     src/audio/audiocore.cpp src/audio/pipewirebackend.cpp
-    src/plugins/plugins.cpp src/plugins/vst3host.cpp
+    src/plugins/plugins.cpp src/plugins/vst3host.cpp src/plugins/bridge.cpp src/plugins/remoteplugin.cpp
     src/optional/rnnoise_api.cpp
     src/platform/autostart_xdg.cpp src/platform/globalshortcuts_portal.cpp
     resources.qrc)
@@ -168,6 +168,13 @@ if(MICFORGE_BUILD_TESTS)
     target_include_directories(bridge_test PRIVATE src)
     target_link_libraries(bridge_test PRIVATE rt)
     add_test(NAME bridge COMMAND bridge_test)
+
+    add_executable(remoteplugin_test tests/remoteplugin_test.cpp src/plugins/remoteplugin.cpp src/plugins/bridge.cpp
+        src/plugins/plugins.cpp src/plugins/vst3host.cpp src/plugins/lv2host.cpp src/optional/lilv_api.cpp)
+    target_include_directories(remoteplugin_test PRIVATE src ${LILV_INCLUDE_DIRS})
+    target_link_libraries(remoteplugin_test PRIVATE Qt6::Core Qt6::Gui vst3host Threads::Threads ${CMAKE_DL_LIBS})
+    add_test(NAME remoteplugin COMMAND remoteplugin_test)
+    set_tests_properties(remoteplugin PROPERTIES ENVIRONMENT "MICFORGE_HOST_BINARY=$<TARGET_FILE:micforge>;QT_QPA_PLATFORM=offscreen")
 
     add_executable(autostart_test tests/autostart_test.cpp src/platform/autostart_xdg.cpp)
     target_include_directories(autostart_test PRIVATE src)

@@ -1,6 +1,9 @@
 #include "pluginmanager.h"
 
+#include "plugins/remoteplugin.h"
+
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QFile>
 #include <QStandardPaths>
 #include <QDir>
@@ -152,7 +155,17 @@ bool PluginManager::instantiate(Entry &e) {
     s.setValue("plugins/loading", e.info.format + ":" + e.info.id);
     s.sync();
     QString err;
-    e.inst = createPlugin(e.info, m_rate, PluginRack::kMaxBlock, &err);
+    if (e.separate) {
+        auto remote = RemotePlugin::create(e.info, m_rate, &err);
+        if (remote) {
+            RemotePlugin *raw = remote.get();
+            raw->onCrashed = [this, raw](const QString &why) { handleCrash(raw, why); };
+            raw->onValueFromPlugin = [this](int, float) { emit valuesChanged(); };
+        }
+        e.inst = std::move(remote);
+    } else {
+        e.inst = createPlugin(e.info, m_rate, PluginRack::kMaxBlock, &err);
+    }
     s.remove("plugins/loading");
     s.sync();
     if (!e.inst) {
@@ -181,6 +194,11 @@ QVariantList PluginManager::chain() const {
     QVariantList out;
     for (const auto &e : m_entries) {
         QVariantMap m = e.info.toMap();
+        m["separate"] = e.separate;
+        m["notice"] = e.notice;
+        auto *remote = dynamic_cast<RemotePlugin *>(e.inst.get());
+        m["hasEditor"] = remote && remote->hasEditor();
+        m["missed"] = remote ? qulonglong(remote->missedBlocks()) : 0;
         m["bypass"] = e.bypass;
         m["error"] = e.error;
         m["loaded"] = bool(e.inst);
@@ -197,6 +215,7 @@ bool PluginManager::add(const QString &format, const QString &id) {
     if (it == m_found.end()) return false;
     Entry e;
     e.info = *it;
+    e.separate = e.info.format == "VST3"; // VST3 plugins run separately by default (crash-safe)
     const bool ok = instantiate(e);
     m_entries.push_back(std::move(e));
     publish();
@@ -286,6 +305,59 @@ void PluginManager::resetValue(int slot, int index) {
 QString PluginManager::text(int slot, int index, double v) const {
     const Entry *e = entry(slot);
     return e && e->inst && index >= 0 && index < e->inst->paramCount() ? e->inst->valueText(index, float(v)) : QString();
+}
+
+// ---------------------------------------------------------------- separate processes
+
+void PluginManager::keepValues(Entry &e) {
+    if (!e.inst) return;
+    for (int i = 0; i < e.inst->paramCount(); ++i) e.saved[e.inst->param(i).id] = e.inst->value(i);
+}
+
+void PluginManager::setSeparate(int slot, bool separate) {
+    Entry *e = entry(slot);
+    if (!e || e->separate == separate) return;
+    keepValues(*e);
+    e->separate = separate;
+    auto old = std::move(e->inst);
+    publish();
+    m_rack->waitIdle();
+    old.reset();
+    e->crashes.clear();
+    e->notice.clear();
+    if (!isBlocked(e->info.format, e->info.id)) instantiate(*e);
+    publish();
+}
+
+void PluginManager::showEditor(int slot, bool show) {
+    Entry *e = entry(slot);
+    if (auto *remote = e ? dynamic_cast<RemotePlugin *>(e->inst.get()) : nullptr) remote->showEditor(show);
+}
+
+// A plugin's separate process died (or hung and was stopped). MicForge kept running and the audio passed
+// through dry meanwhile; restart it with its settings, unless it keeps crashing.
+void PluginManager::handleCrash(PluginInstance *which, const QString &why) {
+    for (auto &e : m_entries) {
+        if (e.inst.get() != which) continue;
+        keepValues(e);
+        std::unique_ptr<PluginInstance> dead = std::move(e.inst);
+        publish();
+        m_rack->waitIdle();
+        static_cast<RemotePlugin *>(dead.release())->deleteLater(); // we're inside its own signal
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        e.crashes.erase(std::remove_if(e.crashes.begin(), e.crashes.end(), [&](qint64 t) { return now - t > 600000; }), e.crashes.end());
+        e.crashes.push_back(now);
+        qWarning("plugins: %s %s", qPrintable(e.info.name), qPrintable(why));
+        if (e.crashes.size() >= 3) {
+            e.error = tr("This plugin stopped working 3 times in 10 minutes (%1), so it's switched off. MicForge kept "
+                         "running. Click Retry to try again, or Block to stop using it.").arg(why);
+            e.notice.clear();
+        } else if (instantiate(e)) {
+            e.notice = tr("Restarted after %1. Your voice kept going while it restarted.").arg(why);
+        }
+        publish();
+        return;
+    }
 }
 
 // ---------------------------------------------------------------- block list, CPU
@@ -420,6 +492,7 @@ void PluginManager::save() const {
     for (const auto &e : m_entries) {
         QJsonObject o = QJsonObject::fromVariantMap(e.info.toMap());
         o["bypass"] = e.bypass;
+        o["separate"] = e.separate;
         QVariantMap vals = e.saved;
         if (e.inst)
             for (int i = 0; i < e.inst->paramCount(); ++i) vals[e.inst->param(i).id] = e.inst->value(i);
@@ -440,6 +513,7 @@ void PluginManager::restore() {
         Entry e;
         e.info = PluginInfo::fromMap(o.toVariantMap());
         e.bypass = o["bypass"].toBool();
+        e.separate = o.contains("separate") ? o["separate"].toBool() : e.info.format == "VST3";
         e.saved = o["params"].toObject().toVariantMap();
         if (isBlocked(e.info.format, e.info.id))
             e.error = tr("This plugin is on your block list, so it isn't loaded.");
