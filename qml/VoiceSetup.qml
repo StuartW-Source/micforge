@@ -483,6 +483,19 @@ Popup {
                     Text { visible: !root.res.learning; text: root.res.ok ? Theme.fmtDb(root.res.gain) : ""; color: Theme.text; font.pixelSize: 12; font.bold: true }
                     Text { visible: !root.res.learning; text: "Compressor"; color: Theme.textFaint; font.pixelSize: 12 }
                     Text { visible: !root.res.learning; text: root.res.ok && !root.res.learning ? Theme.fmtDb(root.res.compThreshold) + ", boost " + Theme.fmtDb(root.res.makeup) : ""; color: Theme.text; font.pixelSize: 12; font.bold: true }
+                    readonly property var lv: root.res.levels || ({})
+                    Text { visible: !!parent.lv.valid; text: "Voice above room"; color: Theme.textFaint; font.pixelSize: 12 }
+                    Text {
+                        visible: !!parent.lv.valid
+                        text: parent.lv.valid ? Math.round(parent.lv.range) + " dB" + (parent.lv.range >= 25 ? " (good)" : parent.lv.range >= 15 ? " (fair)" : " (low)") : ""
+                        color: parent.lv.range >= 15 ? Theme.text : Theme.warn; font.pixelSize: 12; font.bold: true
+                    }
+                    Text { visible: parent.lv.clips !== undefined; text: "Clipping"; color: Theme.textFaint; font.pixelSize: 12 }
+                    Text {
+                        visible: parent.lv.clips !== undefined
+                        text: parent.lv.clips > 0 ? parent.lv.clips + " samples: lower the gain on your interface" : "none"
+                        color: parent.lv.clips > 0 ? Theme.danger : Theme.text; font.pixelSize: 12; font.bold: true
+                    }
                 }
 
                 Repeater {

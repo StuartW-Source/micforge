@@ -265,6 +265,10 @@ int main(int argc, char *argv[]) {
         qInfo("MicForge quitting");
     });
 
+    // Development aid (test instance only): switch microphones shortly after start, as a user would.
+    if (const QString to = qEnvironmentVariable("MICFORGE_SWITCH_TO"); !to.isEmpty() && qEnvironmentVariableIsSet("MICFORGE_TEST"))
+        QTimer::singleShot(1200, &app, [&controller, to] { controller.setCurrentSource(to); });
+
     // Development aid: save a picture of MicForge's own window, then quit.
     const QString snapshot = qEnvironmentVariable("MICFORGE_SNAPSHOT");
     if (!snapshot.isEmpty()) {

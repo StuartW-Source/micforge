@@ -7,9 +7,12 @@
 #include "pluginmanager.h"
 #include "diagnostics.h"
 #include "mictest.h"
+#include "levels.h"
+#include "calibprofiles.h"
 #include "optional/rnnoise_api.h"
 
 #include <QFutureWatcher>
+#include <QSettings>
 #include <QObject>
 #include <QQmlPropertyMap>
 #include <QTimer>
@@ -34,6 +37,9 @@ class Controller : public QObject {
     Q_PROPERTY(PluginManager *plugins READ plugins CONSTANT)
     Q_PROPERTY(Diagnostics *diagnostics READ diagnostics CONSTANT)
     Q_PROPERTY(MicTestSession *micTest READ micTest CONSTANT)
+    // Per-microphone Setup: a message after switching mics, and the microphones that have a saved Setup.
+    Q_PROPERTY(QString profileNotice READ profileNotice NOTIFY profileNoticeChanged)
+    Q_PROPERTY(QVariantList micProfiles READ micProfiles NOTIFY profileNoticeChanged)
 
     Q_PROPERTY(QVariantList sources READ sources NOTIFY sourcesChanged)
     Q_PROPERTY(QString currentSource READ currentSource WRITE setCurrentSource NOTIFY currentSourceChanged)
@@ -96,6 +102,9 @@ public:
     PluginManager *plugins() { return m_plugins; }
     Diagnostics *diagnostics() { return m_diagnostics; }
     MicTestSession *micTest() { return m_micTest; }
+    QString profileNotice() const { return m_profileNotice; }
+    QVariantList micProfiles() const;
+    Q_INVOKABLE void dismissProfileNotice();
     QVariantList sources() const { return m_sources; }
     QString currentSource() const { return m_currentSource; }
     void setCurrentSource(const QString &name);
@@ -172,6 +181,7 @@ signals:
     void autostartChanged();
     void showWelcomeChanged();
     void themeModeChanged();
+    void profileNoticeChanged();
     void presetsChanged();
     void calibChanged();
     void zonesChanged();
@@ -202,6 +212,13 @@ private:
     MicTestSession *m_micTest = nullptr;
     bool m_testPlayback = false;          // mic-test playback needs the monitor output
     void updateMonitorStream();
+    QSettings m_settingsStore;
+    CalibrationProfiles m_profiles;
+    QString m_profileNotice;
+    QString sourceDescription(const QString &name) const;
+    QVariantMap profileParamValues() const;
+    void saveProfileFor(const QString &device);
+    void switchProfile(const QString &from, const QString &to);
     QTimer m_meterTimer, m_saveTimer;
     QVariantList m_sources;
     QString m_currentSource;
@@ -226,6 +243,9 @@ private:
     int m_calibTicks = 0;
     QVariantMap m_calibResult;
     std::map<QString, std::vector<float>> m_takes; // finished recordings of this run
+    std::map<QString, uint64_t> m_takeClips;       // input clipping (before gain) during each take of this run
+    uint64_t m_clipsFrom = 0;
+    mf::LevelStats m_youLevels, m_roomLevels;      // level analysis of the takes being analysed
     size_t m_takeFrom = 0;
     QString m_redo;                                // step being redone on its own ("" = full run)
     bool m_learning = false;

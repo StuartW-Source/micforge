@@ -92,7 +92,7 @@ target_link_libraries(vst3host PUBLIC ${CMAKE_DL_LIBS})
 
 # ---------------------------------------------------------------- application
 add_executable(micforge
-    src/main.cpp src/startup.cpp src/controller.cpp src/pluginmanager.cpp src/diagnostics.cpp src/mictest.cpp
+    src/main.cpp src/startup.cpp src/controller.cpp src/pluginmanager.cpp src/diagnostics.cpp src/mictest.cpp src/calibprofiles.cpp
     src/audio/audiocore.cpp src/audio/pipewirebackend.cpp
     src/plugins/plugins.cpp src/plugins/vst3host.cpp
     src/optional/rnnoise_api.cpp
@@ -137,6 +137,11 @@ if(MICFORGE_BUILD_TESTS)
     target_include_directories(privacy_test PRIVATE src)
     target_link_libraries(privacy_test PRIVATE Qt6::Core)
     add_test(NAME privacy COMMAND privacy_test)
+
+    add_executable(calibprofiles_test tests/calibprofiles_test.cpp src/calibprofiles.cpp)
+    target_include_directories(calibprofiles_test PRIVATE src)
+    target_link_libraries(calibprofiles_test PRIVATE Qt6::Core)
+    add_test(NAME calibprofiles COMMAND calibprofiles_test)
 
     add_executable(autostart_test tests/autostart_test.cpp src/platform/autostart_xdg.cpp)
     target_include_directories(autostart_test PRIVATE src)

@@ -44,6 +44,8 @@ const QList<BuiltinPreset> &builtinPresets() {
 
 // Settings that belong to this mic/room, not to a sound style. Built-in presets never touch them,
 // so loading a preset doesn't undo the voice-separation setup or remove added effects.
+QString calibDirPath() { return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/calib"; }
+
 bool isPersonalKey(const QString &k) {
     static const QStringList keys = {"mute", "inputChannel", "inputGain", "gateThreshold", "gateHysteresis",
                                      "gateFocus", "gateScLow", "gateScHigh", "gateCloseCheck", "gateTilt", "gateTiltDir",
@@ -61,7 +63,7 @@ QString fmtHz(double v) { return v >= 1000 ? QString::number(v / 1000, 'f', 1) +
 } // namespace
 
 Controller::Controller(const StartupInfo &startup, QObject *parent)
-    : QObject(parent), m_startup(startup), m_autostart(createAutostart()) {
+    : QObject(parent), m_profiles(calibDirPath(), m_settingsStore), m_startup(startup), m_autostart(createAutostart()) {
     QSettings s;
     if (m_startup.safeMode)
         qWarning("safe mode: using default sound settings and no plugins; nothing will be saved (%s)",
@@ -285,7 +287,9 @@ void Controller::adoptDefaultInputIfUnset() {
 
 void Controller::setCurrentSource(const QString &name) {
     if (name == m_currentSource) return;
+    const QString previous = m_currentSource;
     m_currentSource = name;
+    switchProfile(previous, name);
     m_backend->setInputDevice(name.toStdString());
     m_saveTimer.start();
     emit currentSourceChanged();
@@ -297,6 +301,73 @@ void Controller::setMonitor(bool on) {
     m_core.setLiveMonitor(on);
     updateMonitorStream();
     emit monitorChanged();
+}
+
+// ---------------------------------------------------------------- per-microphone Setup
+
+QString Controller::sourceDescription(const QString &name) const {
+    for (const QVariant &v : m_sources)
+        if (v.toMap().value("name").toString() == name) return v.toMap().value("description").toString();
+    return name;
+}
+
+QVariantMap Controller::profileParamValues() const {
+    QVariantMap m;
+    for (const QString &k : CalibrationProfiles::profileParams()) m[k] = m_params.value(k);
+    return m;
+}
+
+void Controller::saveProfileFor(const QString &device) {
+    if (m_startup.safeMode || device.isEmpty()) return;
+    m_settingsStore.setValue("calib/device", device);
+    if (m_profiles.save(device, sourceDescription(device), profileParamValues()))
+        qInfo("setup: saved the Setup for this microphone (%s)", qPrintable(device));
+    emit profileNoticeChanged();
+}
+
+// Called when the user picks another microphone. The outgoing mic's Setup is saved first (so nothing
+// is lost), then the incoming mic's own Setup is restored if it has one.
+void Controller::switchProfile(const QString &from, const QString &to) {
+    if (m_startup.safeMode || from.isEmpty() || to.isEmpty() || !m_calibPhase.isEmpty()) return;
+    m_settingsStore.sync();
+    const bool valid = m_settingsStore.value("calib/valid").toBool();
+    const QString owner = m_settingsStore.value("calib/device").toString();
+    if (valid && (owner.isEmpty() || owner == from)) saveProfileFor(from); // older setups have no owner yet: it's the mic in use
+    if (m_profiles.has(to)) {
+        const QString preset = m_currentPreset;
+        const QVariantMap params = m_profiles.restore(to);
+        for (auto it = params.begin(); it != params.end(); ++it) setParam(it.key(), it.value().toDouble());
+        if (m_currentPreset != preset) { m_currentPreset = preset; emit presetsChanged(); } // a mic switch isn't an edit
+        m_profileNotice = tr("Loaded the Setup saved for “%1”.").arg(sourceDescription(to));
+        qInfo("setup: restored the Setup for %s", qPrintable(to));
+        emit zonesChanged();
+        emit recordingsChanged();
+    } else if (valid) {
+        m_profileNotice = tr("“%1” hasn't been set up yet. The current Setup (made with another microphone) stays in "
+                             "use until you run Setup for this one.").arg(sourceDescription(to));
+    } else {
+        m_profileNotice.clear();
+    }
+    emit profileNoticeChanged();
+}
+
+QVariantList Controller::micProfiles() const {
+    QVariantList out = m_profiles.list();
+    const QString owner = QSettings().value("calib/device").toString();
+    for (QVariant &v : out) {
+        QVariantMap m = v.toMap();
+        m["active"] = m.value("device").toString() == owner;
+        m["connected"] = std::any_of(m_sources.begin(), m_sources.end(), [&](const QVariant &s) {
+            return s.toMap().value("name") == m.value("device");
+        });
+        v = m;
+    }
+    return out;
+}
+
+void Controller::dismissProfileNotice() {
+    m_profileNotice.clear();
+    emit profileNoticeChanged();
 }
 
 void Controller::updateMonitorStream() { m_backend->setMonitor(m_monitor || m_testPlayback); }
@@ -505,6 +576,7 @@ void Controller::startCalibration() {
     m_learning = false;
     m_redo.clear();
     m_takes.clear();
+    m_takeClips.clear();
     m_calibResult.clear();
     enterPhase("prepRoom");
 }
@@ -517,6 +589,7 @@ void Controller::startLearnOthers() {
     m_learning = true;
     m_redo.clear();
     m_takes.clear();
+    m_takeClips.clear();
     m_calibResult.clear();
     enterPhase("learnPrep");
 }
@@ -531,6 +604,7 @@ void Controller::redoStep(const QString &step) {
     m_learning = false;
     m_redo = step;
     m_takes.clear();
+    m_takeClips.clear();
     m_calibResult.clear();
     enterPhase(step == "room" ? "prepRoom" : step == "others" ? "prepOthers" : "prepYou");
 }
@@ -542,6 +616,7 @@ void Controller::retuneFromRecordings() {
     m_learning = false;
     m_redo.clear();
     m_takes.clear();
+    m_takeClips.clear();
     m_retune = true;
     m_calibPhase = "analysing";
     startAnalysis();
@@ -567,13 +642,17 @@ void Controller::enterPhase(const QString &phase) {
         const size_t to = std::min(rec.pos.load(), rec.buf.size());
         m_takes[m_calibPhase] = to > m_takeFrom ? std::vector<float>(rec.buf.begin() + m_takeFrom, rec.buf.begin() + to)
                                                 : std::vector<float>{};
+        m_takeClips[m_calibPhase] = m_core.stats.inputClips.load() - m_clipsFrom;
     }
     // Each step records into a fresh buffer: restart the recorder at every countdown.
     if (phase.startsWith("prep") || phase == "learnPrep") {
         rec.active = false;
         rec.pos = 0;
     }
-    if (takes.contains(phase)) m_takeFrom = rec.pos.load();
+    if (takes.contains(phase)) {
+        m_takeFrom = rec.pos.load();
+        m_clipsFrom = m_core.stats.inputClips.load();
+    }
 
     rec.active = phase.startsWith("prep") || phase == "learnPrep" || takes.contains(phase);
     m_calibPhase = phase;
@@ -650,6 +729,8 @@ void Controller::startAnalysis() {
         you = take("you");
         others = take("others");
     }
+    m_youLevels = analyseLevels(you.data(), you.size(), AudioCore::kRate);
+    m_roomLevels = analyseLevels(room.data(), room.size(), AudioCore::kRate);
     saveSamples("room", room);
     saveSamples("you", you);
     saveSamples("others", others);
@@ -682,8 +763,27 @@ void Controller::applyAnalysis(const SeparationResult &r) {
         steps << row("room", tr("Quiet room"), checkRoom(r));
         if (m_params.value("needOthers").toDouble() > 0.5 || r.hadOthers)
             steps << row("others", tr("Other voices"), checkOthers(r));
-        steps << row("you", tr("Your voice"), checkYou(r));
+        QVariantMap youRow = row("you", tr("Your voice"), checkYou(r));
+
+        // Level checks: clipping happens before MicForge (in the mic or interface) and can't be undone
+        // in software, so it outranks everything else; then how far the voice stands above the room.
+        QSettings cs;
+        if (m_takeClips.count("you")) cs.setValue("calib/youClips", qulonglong(m_takeClips["you"]));
+        const qulonglong clips = cs.value("calib/youClips", 0).toULongLong();
+        const double range = m_youLevels.valid && m_roomLevels.valid ? m_youLevels.speechDb - m_roomLevels.speechDb : 0.0;
+        if (clips > 0) {
+            youRow["status"] = "bad";
+            youRow["note"] = tr("Your mic clipped (distorted) %n time(s) while you talked. Turn down the gain on your "
+                                "interface or mic, then redo this step.", nullptr, int(std::min<qulonglong>(clips, 1u << 30)));
+        } else if (youRow["status"] == "ok" && m_youLevels.valid && m_roomLevels.valid && range < 15) {
+            youRow["status"] = "warn";
+            youRow["note"] = tr("Your voice is only %1 dB above the room's background. Move closer to the mic or "
+                                "make the room quieter, then redo this step.").arg(qRound(range));
+        }
+        steps << youRow;
         out["steps"] = steps;
+        out["levels"] = QVariantMap{{"valid", m_youLevels.valid && m_roomLevels.valid}, {"range", range},
+                                    {"youPeak", m_youLevels.peakDb}, {"clips", clips}};
     }
     const bool needOthers = m_params.value("needOthers").toDouble() > 0.5 || m_learning;
     const bool keepLevels = m_learning || m_retune; // don't touch gain/compressor
@@ -802,6 +902,7 @@ void Controller::applyAnalysis(const SeparationResult &r) {
     emit calibChanged();
     emit recordingsChanged();
     QSettings().setValue("calib/version", kCalibVersion);
+    saveProfileFor(m_currentSource); // this Setup now belongs to the microphone in use
     if (m_retune) {
         // Silent re-tune: don't leave a result page behind for the Setup window.
         m_retune = false;
