@@ -9,6 +9,9 @@ A microphone processor for Linux (PipeWire) that cleans up your mic for Discord,
 MicForge creates a virtual microphone called **"MicForge (processed mic)"**. Pick it as your
 input device in Discord, OBS or any other app, and everyone hears your processed voice.
 
+> **Built with Claude.** MicForge is developed with [Claude](https://claude.ai), Anthropic's AI model,
+> using Claude Code. See [Built with Claude](#built-with-claude) below.
+
 ## Highlights
 
 - **Guided setup.** Tell it your mic type and situation, talk for a few seconds, and it tunes
@@ -105,6 +108,15 @@ g++ -std=c++20 -O2 -Isrc tests/dsp_test.cpp -lrnnoise -o dsp_test && ./dsp_test
 Useful environment variables: `MICFORGE_TEST=1` runs a separate test instance (own settings and
 virtual mic) next to your real one. `MICFORGE_PAGE=<stage>`, `MICFORGE_SNAPSHOT=<file.png>`,
 `MICFORGE_SETUP=1` and `MICFORGE_LIBRARY=1` are for screenshots. `VST3_PATH` adds extra VST3 folders.
+
+## Built with Claude
+
+MicForge is built using **Claude** (Anthropic's AI model) through **Claude Code**. The code, DSP, tests,
+packaging and documentation are written with Claude, directed by the project maintainer, who sets the
+requirements, tests every change on real hardware, and decides what ships. Commits written with Claude
+carry a `Co-Authored-By: Claude` trailer.
+
+If you find a problem, please open an issue. Every report is read by a human.
 
 ## Licence
 
