@@ -9,6 +9,7 @@
 | PipeWire loop (non-RT events) | Registry/state/core-error callbacks | Must not tear down PipeWire objects from inside callbacks; marshal to UI thread |
 | Worker (`QtConcurrent`) | Voice-separation analysis | Pure computation on copied buffers |
 | Helper process | `micforge --scan-vst3 <bundle>` | Isolates VST3 scanning crashes |
+| Helper process | `micforge --plugin-host …` (one per separate plugin) | Runs a plugin (and its window); audio via shared memory |
 
 Communication: UI → audio via `Params` (atomic floats + version counter), `ParamQueue` (plugins),
 `PluginRack` slots (atomic pointers + `busy` flag for safe hand-over). Audio → UI via `Meters` (atomics,
@@ -90,6 +91,21 @@ read this one value.
 - **Breath reduction.** 20 ms frames: autocorrelation periodicity on a 12 kHz copy, share above 4.5 kHz,
   level vs recent voiced level; 8 breathy frames in a row → turn down.
 - **Spectrum view.** `ScopeTap` (atomic ring written only while the view is open) → FFT on the UI thread.
+
+## Presets, undo, shortcuts, plugins (Phase 5)
+
+- **Presets** (`src/presetfile.*`): sound settings only; `isSetupKey()` lists what never travels. The plugin
+  chain is stored by format + id + parameter values (`PluginManager::exportChain/importChain`); on import a
+  plugin is resolved from scan results, the current chain, or (LV2) its URI.
+- **Undo** (`src/undostack.h`): recorded in `Controller::applyToEngine`, the one point every change passes;
+  `Controller::UndoGroup` (RAII) groups preset loads, Setup and mic switches.
+- **Global shortcuts** (`src/platform/globalshortcuts*.{h,cpp}`): `IGlobalShortcuts`, XDG portal
+  implementation over Qt D-Bus (request/response signals subscribed before each call).
+- **Plugins**: `PluginRack::load[]` per-slot CPU share (steady_clock around each `process`); block list in
+  settings; plugin presets as files.
+- **Out-of-process plugins** (`src/plugins/bridge.*`, `src/plugins/remoteplugin.*`): see
+  docs/PLUGIN_HOSTING.md. The audio thread's only extra work is a memcpy, a futex wake and a bounded futex
+  wait per block per separate plugin.
 
 ## UI structure (Phase 2)
 

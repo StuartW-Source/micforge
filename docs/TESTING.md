@@ -17,6 +17,12 @@ runs every suite below except the plugin hosts and the recordings analyser.
 | Audio core | ctest `audiocore` | Block/timing statistics, late-block detection (no false alarm after a stream restart), clipping before gain on the selected channel only, time-aligned raw/processed mic-test takes, playback reaches the monitor but never the virtual mic, underrun counting |
 | Privacy | ctest `privacy` | Report scrubbing: home folder, user and computer names (any case, whole words, computer first), file paths, device names |
 | Setup profiles | ctest `calibprofiles` | Save/restore per microphone, recordings and zones follow the mic, no leftover take between mics, sound-preset parameters excluded, nothing saved without a valid Setup |
+| Preset files | ctest `presetfile` | Round trip, v1 migration, Setup keys never written/applied, plugins without paths, clamping, bad/newer files refused |
+| Undo | ctest `undostack` | Drag merging, groups, redo cleared by new changes, back-to-start cancels, 100-step bound |
+| Controller | ctest `controller` (private temporary XDG folders, no audio engine) | Undo/redo, presets keep Setup (also old files), preset load = one undo step, export/import with name collision, bad files, shortcuts + push-to-talk with a fake portal |
+| Plugin bridge | ctest `bridge` | Two processes over shared memory: processed-or-dry never mixed, deadline misses during a stall, round-trip time, clean quit |
+| Separate plugins | ctest `remoteplugin` (needs lilv + Calf) | Real helper process: identical output to in-process, settings delivered, cost per block, killed helper reported and audio untouched |
+| Plugin window | `MICFORGE_HOST_BINARY=build-cmake/micforge build-cmake/plugin_editor_check` (manual; opens a window; needs lsp-plugins-vst3) | Window opens at the plugin's size, no missed blocks, closes on request |
 | Autostart | `g++ -std=c++20 -fPIC -Isrc $(pkg-config --cflags Qt6Core) tests/autostart_test.cpp src/platform/autostart_xdg.cpp $(pkg-config --libs Qt6Core) -o /tmp/autostart_test && /tmp/autostart_test` | Login entry create/remove/hidden flag, refresh never re-points at a development build, test instance never touches the real entry |
 | Plugin hosts | see "Plugin host test" below | LV2 scan/load/process/parameters; VST3 scan/load/parameters/processing |
 | Recordings analyser | `g++ -std=c++20 -O2 -Isrc tests/analyse_recordings.cpp src/optional/rnnoise_api.cpp -ldl -o /tmp/analyse && /tmp/analyse ~/.local/share/MicForge/MicForge/calib` | Runs the gate on a user's saved setup recordings (local only) |
@@ -59,6 +65,12 @@ exercise Setup profiles).
   the CMake build (cmake not installed), keyboard traversal by hand, live desktop theme switching,
   fractional scaling.
 
+- 2026-11-26 (Phase 5, plugin host): ctest 12/12 (new: bridge, remoteplugin); plugin_editor_check with
+  LSP Compressor Mono VST3 (installed by the user for this). Note: in the test binaries `qInfo` output
+  is suppressed, so helper diagnostics are also delivered via `onLog`.
+- 2026-11-26 (Phase 5): ctest 10/10 (new: presetfile, undostack, controller; plugin CPU in audiocore;
+  preset backup in startup 10/10). Real GlobalShortcuts portal detected silently (Plasma 6.8, version 2);
+  binding dialog and key presses left to the user. qmake build checked.
 - 2026-11-26: reboot/login autostart confirmed from the user's log (boot 19:06:49, login launch 19:07:09,
   ready 19:07:11).
 - 2026-11-26 (Phase 4): tests written first and run against a copy of the previous `src/` (baseline),

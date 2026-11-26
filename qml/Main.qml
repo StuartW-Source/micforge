@@ -149,6 +149,8 @@ ApplicationWindow {
     function openLibrary() { library.open() }
 
     Shortcut { sequence: "Ctrl+M"; onActivated: controller.toggleMute() }
+    Shortcut { sequences: [StandardKey.Undo]; onActivated: controller.undo() }
+    Shortcut { sequences: [StandardKey.Redo, "Ctrl+Shift+Z"]; onActivated: controller.redo() }
     Repeater {
         model: win.pages
         Item { Shortcut { sequence: "Ctrl+" + (index + 1); onActivated: win.page = modelData.id } }
@@ -222,6 +224,25 @@ ApplicationWindow {
             }
 
             Item { Layout.fillWidth: true; Layout.minimumWidth: 0 }
+
+            PillButton {
+                text: "↶"
+                implicitWidth: Theme.controlHeight
+                enabled: controller.undoText !== ""
+                onClicked: controller.undo()
+                Accessible.name: "Undo " + controller.undoText
+                ToolTipLite { visible: uh.hovered && parent.enabled; text: "Undo: " + controller.undoText + " (Ctrl+Z)" }
+                HoverHandler { id: uh }
+            }
+            PillButton {
+                text: "↷"
+                implicitWidth: Theme.controlHeight
+                enabled: controller.redoText !== ""
+                onClicked: controller.redo()
+                Accessible.name: "Redo " + controller.redoText
+                ToolTipLite { visible: rh.hovered && parent.enabled; text: "Redo: " + controller.redoText + " (Ctrl+Shift+Z)" }
+                HoverHandler { id: rh }
+            }
 
             PillButton {
                 text: controller.muted ? "Muted" : "Mute"
@@ -314,6 +335,8 @@ ApplicationWindow {
                         n.push({ kind: "danger", text: "Muted: your apps are receiving silence.", action: "Unmute" })
                     else if (win.bypassed)
                         n.push({ kind: "warn", text: "Comparing: apps hear your RAW microphone (only input gain applied).", action: "Turn processing back on" })
+                    if (controller.presetNotice !== "")
+                        n.push({ kind: "warn", text: controller.presetNotice, action: "Dismiss" })
                     if (controller.profileNotice !== "")
                         n.push({ kind: "info", text: controller.profileNotice, action: "OK" })
                     for (var i = 0; i < controller.unavailableFeatures.length; ++i)
@@ -350,6 +373,7 @@ ApplicationWindow {
                                 case "Unmute": controller.muted = false; break
                                 case "Turn processing back on": controller.setParam("bypass", 0); break
                                 case "OK": controller.dismissProfileNotice(); break
+                                case "Dismiss": controller.dismissPresetNotice(); break
                                 default: controller.requestRestart(false)
                                 }
                             }

@@ -1,4 +1,5 @@
 #include "controller.h"
+#include "presetfile.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -148,6 +149,27 @@ Controller::Controller(const StartupInfo &startup, QObject *parent)
     connect(&m_meterTimer, &QTimer::timeout, this, &Controller::pollMeters);
     m_meterTimer.start();
 
+    // System-wide shortcuts. Probing the desktop is silent; binding (which may ask the user) only happens
+    // once they've switched shortcuts on.
+    m_shortcutsEnabled = s.value("shortcuts/enabled", false).toBool();
+    m_pushToTalk = s.value("shortcuts/pushToTalk", false).toBool();
+    m_shortcuts = createGlobalShortcuts();
+    m_shortcuts->onChanged = [this] { emit shortcutsChanged(); };
+    m_shortcuts->onActivated = [this](const QString &id) {
+        if (id == "mute") toggleMute();
+        else if (id == "push-to-talk" && m_pushToTalk) setMuted(false);
+    };
+    m_shortcuts->onDeactivated = [this](const QString &id) {
+        if (id == "push-to-talk" && m_pushToTalk) setMuted(true);
+    };
+    if (m_shortcutsEnabled && !m_startup.safeMode) bindShortcuts();
+    if (m_pushToTalk && m_shortcutsEnabled) setMuted(true); // push-to-talk: silent until the key is held
+
+    // From here on, every settings change can be undone.
+    for (int i = 0; i < PARAM_COUNT; ++i) m_shadow[size_t(i)] = m_params.value(kParams[i].key).toDouble();
+    m_clock.start();
+    m_recordUndo = true;
+
     // The voice-separation analysis improved since these recordings were tuned: re-tune once.
     if (!m_startup.safeMode && hasRecordings() && QSettings().value("calib/version", 1).toInt() < kCalibVersion)
         QTimer::singleShot(1500, this, &Controller::retuneFromRecordings);
@@ -207,7 +229,28 @@ double Controller::defaultValue(const QString &key) const {
     return id < 0 ? 0 : kParams[id].def;
 }
 
+namespace {
+// Plain-English name of the effect or control a parameter belongs to, for "Undo …".
+QString undoLabelFor(const QString &key) {
+    static const std::pair<const char *, const char *> prefixes[] = {
+        {"input", "Input"}, {"noise", "Noise Removal"}, {"hum", "Hum Removal"}, {"lowCut", "Low Cut"},
+        {"gate", "Voice Gate"}, {"breath", "Breath reduction"}, {"autoLevel", "Auto Level"}, {"comp", "Compressor"},
+        {"deess", "De-esser"}, {"vc", "Voice Changer"}, {"eq", "Equaliser"}, {"tone", "Tone"},
+        {"plugins", "Plugins"}, {"warmth", "Warmth"}, {"exciter", "Exciter"}, {"doubler", "Doubler"},
+        {"echo", "Echo"}, {"reverb", "Reverb"}, {"output", "Output"}, {"limiter", "Limiter"}, {"need", "Setup answers"},
+        {"mic", "Setup answers"}};
+    for (const auto &[p, name] : prefixes)
+        if (key.startsWith(QLatin1String(p))) return key.endsWith("Added") ? QString("Add/remove %1").arg(name) : QString(name);
+    return QStringLiteral("setting");
+}
+} // namespace
+
 void Controller::applyToEngine(int id, double value) {
+    if (m_recordUndo && !m_applyingUndo && id != Bypass && id != Mute && value != m_shadow[size_t(id)]) {
+        m_undo.record(kParams[id].key, m_shadow[size_t(id)], value, m_clock.elapsed(), undoLabelFor(kParams[id].key));
+        emit undoChanged();
+    }
+    m_shadow[size_t(id)] = value;
     m_core.params.set(id, float(value));
     if (id != Bypass && id != Mute) m_saveTimer.start();
     if (id == InputGain || id == GateFocus || id == GateScLow || id == GateScHigh) emit zonesChanged();
@@ -340,6 +383,7 @@ void Controller::switchProfile(const QString &from, const QString &to) {
     const QString owner = m_settingsStore.value("calib/device").toString();
     if (valid && (owner.isEmpty() || owner == from)) saveProfileFor(from); // older setups have no owner yet: it's the mic in use
     if (m_profiles.has(to)) {
+        UndoGroup group(this, tr("Switch microphone"));
         const QString preset = m_currentPreset;
         const QVariantMap params = m_profiles.restore(to);
         for (auto it = params.begin(); it != params.end(); ++it) setParam(it.key(), it.value().toDouble());
@@ -374,6 +418,65 @@ QVariantList Controller::micProfiles() const {
 void Controller::dismissProfileNotice() {
     m_profileNotice.clear();
     emit profileNoticeChanged();
+}
+
+// ---------------------------------------------------------------- global shortcuts
+
+void Controller::bindShortcuts() {
+    m_shortcuts->bind({{"mute", tr("Mute or unmute MicForge"), "CTRL+ALT+M"},
+                       {"push-to-talk", tr("Push to talk (hold to speak through MicForge)"), ""}});
+}
+
+void Controller::setShortcutsEnabled(bool on) {
+    if (on == m_shortcutsEnabled) return;
+    m_shortcutsEnabled = on;
+    if (!m_startup.safeMode) QSettings().setValue("shortcuts/enabled", on);
+    if (on) bindShortcuts();
+    else if (m_pushToTalk) setMuted(false); // shortcuts off: push-to-talk can't work, so don't stay muted
+    emit shortcutsChanged();
+}
+
+void Controller::setPushToTalk(bool on) {
+    if (on == m_pushToTalk) return;
+    m_pushToTalk = on;
+    if (!m_startup.safeMode) QSettings().setValue("shortcuts/pushToTalk", on);
+    if (m_shortcutsEnabled) setMuted(on);
+    emit shortcutsChanged();
+}
+
+QString Controller::shortcutsStatus() const {
+    if (!m_shortcuts) return {};
+    if (!m_shortcuts->available()) return m_shortcuts->status();
+    return m_shortcutsEnabled ? m_shortcuts->status() : tr("Off.");
+}
+
+void Controller::undo() {
+    if (!m_undo.canUndo()) return;
+    applyUndoStep(m_undo.takeUndo(), true);
+}
+
+void Controller::redo() {
+    if (!m_undo.canRedo()) return;
+    applyUndoStep(m_undo.takeRedo(), false);
+}
+
+void Controller::applyUndoStep(const UndoStack::Step &step, bool undo) {
+    m_applyingUndo = true;
+    bool soundChanged = false;
+    for (int k = 0; k < step.changes.size(); ++k) {
+        const auto &c = step.changes[undo ? step.changes.size() - 1 - k : k];
+        const int id = idForKey(c.key);
+        if (id < 0) continue;
+        const double v = undo ? c.before : c.after;
+        m_params.insert(c.key, v);
+        applyToEngine(id, v);
+        soundChanged |= !isPersonalKey(c.key);
+    }
+    m_applyingUndo = false;
+    if (soundChanged && !m_currentPreset.isEmpty()) m_currentPreset.clear();
+    emit presetsChanged();
+    emit zonesChanged();
+    emit undoChanged();
 }
 
 void Controller::updateMonitorStream() { m_backend->setMonitor(m_monitor || m_testPlayback); }
@@ -444,43 +547,67 @@ bool Controller::isBuiltinPreset(const QString &name) const {
 }
 
 void Controller::loadPreset(const QString &name) {
-    QVariantMap values;
-    bool found = false;
+    UndoGroup group(this, tr("Load preset “%1”").arg(name));
+    m_presetNotice.clear();
     for (const auto &p : builtinPresets()) {
-        if (name == p.name) {
-            for (int i = 0; i < PARAM_COUNT; ++i)
-                if (!isPersonalKey(kParams[i].key)) values[kParams[i].key] = kParams[i].def;
-            for (auto it = p.values.begin(); it != p.values.end(); ++it) values[it.key()] = it.value();
-            found = true;
+        if (name != p.name) continue;
+        // Built-in presets reset every sound setting, but never touch Setup values, added effects or plugins.
+        QVariantMap values;
+        for (int i = 0; i < PARAM_COUNT; ++i)
+            if (!isPersonalKey(kParams[i].key)) values[kParams[i].key] = kParams[i].def;
+        for (auto it = p.values.begin(); it != p.values.end(); ++it) values[it.key()] = it.value();
+        for (auto it = values.begin(); it != values.end(); ++it) {
+            const int id = idForKey(it.key());
+            if (id < 0) continue;
+            m_params.insert(it.key(), it.value().toDouble());
+            applyToEngine(id, it.value().toDouble());
         }
+        m_currentPreset = name;
+        emit presetsChanged();
+        return;
     }
-    if (!found) {
-        QFile f(presetDir() + "/" + name + ".json");
-        if (!f.open(QIODevice::ReadOnly)) return;
-        values = QJsonDocument::fromJson(f.readAll()).object().toVariantMap();
-        values.remove("bypass");
-        values.remove("mute");
+    applyPresetFile(presetDir() + "/" + name + ".json", name);
+}
+
+// Loads a user preset file: its sound settings (never Setup values) and, if it has them, its plugins.
+bool Controller::applyPresetFile(const QString &path, const QString &name) {
+    QFile f(path);
+    PresetFile pf;
+    QString err;
+    if (!f.open(QIODevice::ReadOnly) || !PresetFile::fromJson(f.readAll(), pf, &err)) {
+        m_presetNotice = tr("Couldn't load “%1”: %2").arg(name, err.isEmpty() ? tr("the file can't be read") : err);
+        emit presetsChanged();
+        return false;
     }
-    for (auto it = values.begin(); it != values.end(); ++it) {
+    for (auto it = pf.params.begin(); it != pf.params.end(); ++it) {
         const int id = idForKey(it.key());
         if (id < 0) continue;
         m_params.insert(it.key(), it.value().toDouble());
         applyToEngine(id, it.value().toDouble());
     }
+    if (pf.hasPlugins && m_plugins) {
+        const QStringList missing = m_plugins->importChain(pf.plugins);
+        if (!missing.isEmpty())
+            m_presetNotice = tr("“%1” uses plugins that aren't installed here, so they were left out: %2.").arg(name, missing.join(", "));
+    }
     m_currentPreset = name;
     emit presetsChanged();
+    return true;
 }
 
 void Controller::savePreset(const QString &rawName) {
     const QString name = rawName.trimmed().replace('/', '-');
-    if (name.isEmpty() || isBuiltinPreset(name)) return;
+    if (name.isEmpty() || isBuiltinPreset(name) || m_startup.safeMode) return;
     QDir().mkpath(presetDir());
-    QJsonObject o;
+    PresetFile pf;
+    pf.name = name;
     for (int i = 0; i < PARAM_COUNT; ++i)
-        if (i != Bypass && i != Mute) o[kParams[i].key] = m_params.value(kParams[i].key).toDouble();
+        if (!isSetupKey(kParams[i].key)) pf.params[kParams[i].key] = m_params.value(kParams[i].key).toDouble();
+    if (m_plugins) pf.plugins = m_plugins->exportChain();
+    pf.hasPlugins = true;
     QFile f(presetDir() + "/" + name + ".json");
     if (!f.open(QIODevice::WriteOnly)) return;
-    f.write(QJsonDocument(o).toJson());
+    f.write(pf.toJson(version()));
     m_currentPreset = name;
     m_saveTimer.start();
     emit presetsChanged();
@@ -491,6 +618,48 @@ void Controller::deletePreset(const QString &name) {
     QFile::remove(presetDir() + "/" + name + ".json");
     if (m_currentPreset == name) m_currentPreset.clear();
     emit presetsChanged();
+}
+
+QString Controller::exportPreset(const QString &name, const QUrl &file) {
+    const QString to = file.isLocalFile() ? file.toLocalFile() : file.toString();
+    PresetFile pf;
+    pf.name = name;
+    if (isBuiltinPreset(name)) {
+        for (const auto &p : builtinPresets())
+            if (p.name == name) for (auto it = p.values.begin(); it != p.values.end(); ++it) pf.params[it.key()] = it.value();
+    } else {
+        QFile src(presetDir() + "/" + name + ".json");
+        QString err;
+        if (!src.open(QIODevice::ReadOnly) || !PresetFile::fromJson(src.readAll(), pf, &err)) return tr("Couldn't read “%1”.").arg(name);
+        pf.name = name;
+    }
+    const QByteArray data = pf.toJson(version()); // always the current format
+    QFile out(to);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate) || out.write(data) != data.size()) return tr("Couldn't write %1.").arg(to);
+    return tr("Exported “%1”.").arg(name);
+}
+
+QString Controller::importPreset(const QUrl &file) {
+    if (m_startup.safeMode) return tr("Presets can't be imported in safe mode.");
+    const QString from = file.isLocalFile() ? file.toLocalFile() : file.toString();
+    QFile f(from);
+    PresetFile pf;
+    QString err;
+    if (!f.open(QIODevice::ReadOnly) || !PresetFile::fromJson(f.readAll(), pf, &err))
+        return err.isEmpty() ? tr("That file can't be read.") : err;
+    QString base = (pf.name.isEmpty() ? QFileInfo(from).completeBaseName() : pf.name).trimmed().replace('/', '-');
+    if (base.isEmpty()) base = tr("Imported preset");
+    // Never overwrite an existing preset: pick a free name.
+    QString name = base;
+    for (int n = 2; isBuiltinPreset(name) || QFile::exists(presetDir() + "/" + name + ".json"); ++n) name = QString("%1 (%2)").arg(base).arg(n);
+    pf.name = name;
+    QDir().mkpath(presetDir());
+    QFile out(presetDir() + "/" + name + ".json");
+    if (!out.open(QIODevice::WriteOnly)) return tr("Couldn't save the imported preset.");
+    out.write(pf.toJson(version()));
+    out.close();
+    emit presetsChanged();
+    return name == base ? tr("Imported “%1”.").arg(name) : tr("Imported as “%1” (that name was taken).").arg(name);
 }
 
 // ---------------------------------------------------------------- autostart
@@ -760,6 +929,7 @@ void Controller::startAnalysis() {
 }
 
 void Controller::applyAnalysis(const SeparationResult &r) {
+    UndoGroup group(this, tr("Setup"));
     if (m_calibPhase != "analysing") return; // cancelled meanwhile
     QVariantMap out;
     out["learning"] = m_learning;

@@ -1,5 +1,6 @@
 #include "controller.h"
 #include "startup.h"
+#include "plugins/remoteplugin.h"
 
 #include <pipewire/pipewire.h>
 
@@ -58,6 +59,8 @@ int main(int argc, char *argv[]) {
         QCoreApplication helper(argc, argv);
         return PluginManager::runScanHelper(QString::fromLocal8Bit(argv[2]));
     }
+    // Helper mode: one plugin in its own process (see docs/PLUGIN_HOSTING.md).
+    if (argc >= 2 && std::strcmp(argv[1], "--plugin-host") == 0) return mf::runPluginHost(argc, argv);
     pw_init(&argc, &argv);
 
     QApplication app(argc, argv);

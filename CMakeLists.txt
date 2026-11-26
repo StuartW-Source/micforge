@@ -5,7 +5,7 @@
 #   ctest --test-dir build-cmake --output-on-failure
 #   cmake --install build-cmake --prefix ~/.local
 cmake_minimum_required(VERSION 3.21)
-project(MicForge VERSION 0.1.0 LANGUAGES C CXX)
+project(MicForge VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,7 +33,7 @@ if(NOT MICFORGE_WITH_VST3)
     message(FATAL_ERROR "Building without VST3 isn't supported yet.")
 endif()
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Qml Quick QuickControls2 Network Concurrent)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Qml Quick QuickControls2 Network Concurrent DBus)
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
@@ -92,11 +92,11 @@ target_link_libraries(vst3host PUBLIC ${CMAKE_DL_LIBS})
 
 # ---------------------------------------------------------------- application
 add_executable(micforge
-    src/main.cpp src/startup.cpp src/controller.cpp src/pluginmanager.cpp src/diagnostics.cpp src/mictest.cpp src/calibprofiles.cpp src/detectorspectrum.cpp
+    src/main.cpp src/startup.cpp src/controller.cpp src/pluginmanager.cpp src/diagnostics.cpp src/mictest.cpp src/calibprofiles.cpp src/detectorspectrum.cpp src/presetfile.cpp
     src/audio/audiocore.cpp src/audio/pipewirebackend.cpp
-    src/plugins/plugins.cpp src/plugins/vst3host.cpp
+    src/plugins/plugins.cpp src/plugins/vst3host.cpp src/plugins/bridge.cpp src/plugins/remoteplugin.cpp
     src/optional/rnnoise_api.cpp
-    src/platform/autostart_xdg.cpp
+    src/platform/autostart_xdg.cpp src/platform/globalshortcuts_portal.cpp
     resources.qrc)
 if(MICFORGE_WITH_LV2)
     target_sources(micforge PRIVATE src/plugins/lv2host.cpp src/optional/lilv_api.cpp)
@@ -107,7 +107,7 @@ endif()
 target_include_directories(micforge PRIVATE src)
 target_compile_definitions(micforge PRIVATE MICFORGE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(micforge PRIVATE
-    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Concurrent
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Concurrent Qt6::DBus
     PkgConfig::PIPEWIRE vst3host Threads::Threads ${CMAKE_DL_LIBS})
 
 include(GNUInstallDirs)
@@ -128,7 +128,7 @@ if(MICFORGE_BUILD_TESTS)
     target_link_libraries(dsp_test PRIVATE ${CMAKE_DL_LIBS})
     add_test(NAME dsp COMMAND dsp_test)
 
-    add_executable(audiocore_test tests/audiocore_test.cpp src/audio/audiocore.cpp src/optional/rnnoise_api.cpp)
+    add_executable(audiocore_test tests/audiocore_test.cpp src/audio/audiocore.cpp src/optional/rnnoise_api.cpp src/plugins/plugins.cpp)
     target_include_directories(audiocore_test PRIVATE src)
     target_link_libraries(audiocore_test PRIVATE Qt6::Core Threads::Threads ${CMAKE_DL_LIBS})
     add_test(NAME audiocore COMMAND audiocore_test)
@@ -142,6 +142,45 @@ if(MICFORGE_BUILD_TESTS)
     target_include_directories(calibprofiles_test PRIVATE src)
     target_link_libraries(calibprofiles_test PRIVATE Qt6::Core)
     add_test(NAME calibprofiles COMMAND calibprofiles_test)
+
+    add_executable(presetfile_test tests/presetfile_test.cpp src/presetfile.cpp)
+    target_include_directories(presetfile_test PRIVATE src)
+    target_link_libraries(presetfile_test PRIVATE Qt6::Core)
+    add_test(NAME presetfile COMMAND presetfile_test)
+
+    add_executable(undostack_test tests/undostack_test.cpp)
+    target_include_directories(undostack_test PRIVATE src)
+    target_link_libraries(undostack_test PRIVATE Qt6::Core)
+    add_test(NAME undostack COMMAND undostack_test)
+
+    # Controller (undo, presets, import/export) with private settings folders.
+    get_target_property(_mf_sources micforge SOURCES)
+    list(FILTER _mf_sources EXCLUDE REGEX "src/main\\.cpp$")
+    add_executable(controller_test tests/controller_test.cpp ${_mf_sources})
+    target_include_directories(controller_test PRIVATE src ${LILV_INCLUDE_DIRS})
+    target_compile_definitions(controller_test PRIVATE MICFORGE_VERSION="${PROJECT_VERSION}")
+    target_link_libraries(controller_test PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Concurrent Qt6::DBus
+        PkgConfig::PIPEWIRE vst3host Threads::Threads ${CMAKE_DL_LIBS})
+    add_test(NAME controller COMMAND controller_test)
+
+    add_executable(bridge_test tests/bridge_test.cpp src/plugins/bridge.cpp)
+    target_include_directories(bridge_test PRIVATE src)
+    target_link_libraries(bridge_test PRIVATE rt)
+    add_test(NAME bridge COMMAND bridge_test)
+
+    add_executable(remoteplugin_test tests/remoteplugin_test.cpp src/plugins/remoteplugin.cpp src/plugins/bridge.cpp
+        src/plugins/plugins.cpp src/plugins/vst3host.cpp src/plugins/lv2host.cpp src/optional/lilv_api.cpp)
+    target_include_directories(remoteplugin_test PRIVATE src ${LILV_INCLUDE_DIRS})
+    target_link_libraries(remoteplugin_test PRIVATE Qt6::Core Qt6::Gui vst3host Threads::Threads ${CMAKE_DL_LIBS})
+    add_test(NAME remoteplugin COMMAND remoteplugin_test)
+    set_tests_properties(remoteplugin PROPERTIES ENVIRONMENT "MICFORGE_HOST_BINARY=$<TARGET_FILE:micforge>;QT_QPA_PLATFORM=offscreen")
+
+    # Manual: opens a VST3 plugin window (needs lsp-plugins-vst3); not run by ctest.
+    add_executable(plugin_editor_check tests/plugin_editor_check.cpp src/plugins/remoteplugin.cpp src/plugins/bridge.cpp
+        src/plugins/plugins.cpp src/plugins/vst3host.cpp src/plugins/lv2host.cpp src/optional/lilv_api.cpp)
+    target_include_directories(plugin_editor_check PRIVATE src ${LILV_INCLUDE_DIRS})
+    target_link_libraries(plugin_editor_check PRIVATE Qt6::Core Qt6::Gui vst3host Threads::Threads ${CMAKE_DL_LIBS})
 
     add_executable(autostart_test tests/autostart_test.cpp src/platform/autostart_xdg.cpp)
     target_include_directories(autostart_test PRIVATE src)

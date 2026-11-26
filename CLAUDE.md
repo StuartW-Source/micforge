@@ -53,9 +53,11 @@ Plugin-host tests and the recordings analyser are described in `docs/TESTING.md`
 | `src/mictest.*`, `src/levels.h` | Mic test session; level analysis (shared with Setup) |
 | `src/calibprofiles.*` | Per-microphone Setup profiles |
 | `src/spectrum.h`, `src/detectorspectrum.*` | FFT/log bands; the gate's spectrum view |
+| `src/presetfile.*`, `src/undostack.h` | Versioned preset files; undo/redo history |
+| `src/platform/globalshortcuts*` | System-wide shortcuts (XDG GlobalShortcuts portal) |
 | `src/startup.*` | Logging, single instance, crash-loop guard / safe mode, settings backups, signals |
 | `src/optional/` | Run-time loading of optional libraries (rnnoise, lilv) via `src/platform/dynlib.h` |
-| `src/plugins/`, `src/pluginmanager.*` | VST3 + LV2 hosting, plugin chain management |
+| `src/plugins/`, `src/pluginmanager.*` | VST3 + LV2 hosting, plugin chain management; `bridge.*` + `remoteplugin.*` run plugins in a separate `--plugin-host` process (docs/PLUGIN_HOSTING.md) |
 | `qml/` | UI. `Main.qml` = header + sidebar + pages (`*Page.qml`); `Stage*.qml` are effect panels; `Theme.qml` holds design tokens and effect presets |
 
 ## Real-time rules (audio thread = PipeWire `process` callbacks, `VoiceChain::process`, plugin `process`)

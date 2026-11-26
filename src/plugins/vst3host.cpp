@@ -1,6 +1,7 @@
 // VST3 plugin hosting with Steinberg's (MIT-licensed) VST3 SDK hosting helpers.
 #include "plugins.h"
 
+#include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
@@ -12,7 +13,11 @@
 #include "public.sdk/source/vst/hosting/processdata.h"
 #include "public.sdk/source/vst/utility/stringconvert.h"
 
+#include <QSocketNotifier>
+#include <QTimer>
+
 #include <cstdio>
+#include <map>
 #include <cstring>
 
 using namespace Steinberg;
@@ -32,9 +37,85 @@ void ensureHostContext() {
 
 QString fromString128(const String128 s) { return QString::fromStdU16String(std::u16string(reinterpret_cast<const char16_t *>(s))); }
 
+// Minimal reference counting for host-side VST3 interfaces.
+#define MF_FUNKNOWN_REFCOUNT                                                     \
+    std::atomic<int32> refs{1};                                                  \
+    uint32 PLUGIN_API addRef() override { return uint32(++refs); }               \
+    uint32 PLUGIN_API release() override { return uint32(--refs); } // owned by the instance
+
+// Receives edits made in the plugin's own window.
+class EditHandler final : public IComponentHandler {
+public:
+    std::function<void(ParamID, ParamValue)> edit;
+    tresult PLUGIN_API beginEdit(ParamID) override { return kResultOk; }
+    tresult PLUGIN_API performEdit(ParamID id, ParamValue v) override { if (edit) edit(id, v); return kResultOk; }
+    tresult PLUGIN_API endEdit(ParamID) override { return kResultOk; }
+    tresult PLUGIN_API restartComponent(int32) override { return kResultOk; }
+    tresult PLUGIN_API queryInterface(const TUID iid, void **obj) override {
+        if (FUnknownPrivate::iidEqual(iid, IComponentHandler::iid) || FUnknownPrivate::iidEqual(iid, FUnknown::iid)) {
+            *obj = static_cast<IComponentHandler *>(this); addRef(); return kResultOk;
+        }
+        *obj = nullptr; return kNoInterface;
+    }
+    MF_FUNKNOWN_REFCOUNT
+};
+
+// The editor's frame: resize requests, and the Linux run loop (file descriptors + timers) on Qt's loop.
+class EditorFrame final : public IPlugFrame, public Linux::IRunLoop {
+public:
+    std::function<void(int, int)> resize;
+    ~EditorFrame() { for (auto &[h, n] : fds) delete n; for (auto &[h, t] : timers) delete t; }
+    tresult PLUGIN_API resizeView(IPlugView *view, ViewRect *r) override {
+        if (!r) return kInvalidArgument;
+        if (resize) resize(r->getWidth(), r->getHeight());
+        if (view) view->onSize(r);
+        return kResultOk;
+    }
+    tresult PLUGIN_API registerEventHandler(Linux::IEventHandler *h, Linux::FileDescriptor fd) override {
+        auto *n = new QSocketNotifier(fd, QSocketNotifier::Read);
+        QObject::connect(n, &QSocketNotifier::activated, [h, fd] { h->onFDIsSet(fd); });
+        fds.insert({h, n});
+        return kResultOk;
+    }
+    tresult PLUGIN_API unregisterEventHandler(Linux::IEventHandler *h) override {
+        auto range = fds.equal_range(h);
+        for (auto it = range.first; it != range.second; ++it) delete it->second;
+        fds.erase(h);
+        return kResultOk;
+    }
+    tresult PLUGIN_API registerTimer(Linux::ITimerHandler *h, Linux::TimerInterval ms) override {
+        auto *t = new QTimer();
+        QObject::connect(t, &QTimer::timeout, [h] { h->onTimer(); });
+        t->start(int(ms));
+        timers.insert({h, t});
+        return kResultOk;
+    }
+    tresult PLUGIN_API unregisterTimer(Linux::ITimerHandler *h) override {
+        auto range = timers.equal_range(h);
+        for (auto it = range.first; it != range.second; ++it) delete it->second;
+        timers.erase(h);
+        return kResultOk;
+    }
+    tresult PLUGIN_API queryInterface(const TUID iid, void **obj) override {
+        if (FUnknownPrivate::iidEqual(iid, IPlugFrame::iid) || FUnknownPrivate::iidEqual(iid, FUnknown::iid)) {
+            *obj = static_cast<IPlugFrame *>(this); addRef(); return kResultOk;
+        }
+        if (FUnknownPrivate::iidEqual(iid, Linux::IRunLoop::iid)) {
+            *obj = static_cast<Linux::IRunLoop *>(this); addRef(); return kResultOk;
+        }
+        *obj = nullptr; return kNoInterface;
+    }
+    MF_FUNKNOWN_REFCOUNT
+private:
+    std::multimap<Linux::IEventHandler *, QSocketNotifier *> fds;
+    std::multimap<Linux::ITimerHandler *, QTimer *> timers;
+};
+
 class Vst3Instance final : public PluginInstance {
 public:
     ~Vst3Instance() override {
+        closeEditor();
+        if (controller) controller->setComponentHandler(nullptr);
         if (processor && processing) processor->setProcessing(false);
         if (component && active) component->setActive(false);
         data.unprepare();
@@ -145,6 +226,19 @@ public:
         }
         initValues();
         inChanges.setMaxParameters(int32(ids.size()) + 1);
+        if (controller) {
+            // Edits made in the plugin's own window: send them to the processor and tell MicForge.
+            handler.edit = [this](ParamID id, ParamValue v) {
+                for (size_t i = 0; i < ids.size(); ++i)
+                    if (ids[i] == id) {
+                        values[i].store(float(v), std::memory_order_relaxed);
+                        queue.push({int(i), float(v)});
+                        if (onEditorChange) onEditorChange(int(i), float(v));
+                        break;
+                    }
+            };
+            controller->setComponentHandler(&handler);
+        }
         latency = int(processor->getLatencySamples());
         if (processor->setProcessing(true) == kResultOk) processing = true;
         this->maxBlock = maxBlock;
@@ -181,12 +275,44 @@ public:
         return PluginInstance::valueText(i, v);
     }
 
+    bool hasEditor() override {
+        if (!controller) return false;
+        IPtr<IPlugView> v = owned(controller->createView(ViewType::kEditor));
+        return v && v->isPlatformTypeSupported(kPlatformTypeX11EmbedWindowID) == kResultTrue;
+    }
+
+    bool openEditor(uintptr_t parent, std::function<void(int, int)> resize) override {
+        if (!controller || view) return bool(view);
+        view = owned(controller->createView(ViewType::kEditor));
+        if (!view || view->isPlatformTypeSupported(kPlatformTypeX11EmbedWindowID) != kResultTrue) { view = nullptr; return false; }
+        frame.resize = std::move(resize);
+        view->setFrame(&frame);
+        if (view->attached(reinterpret_cast<void *>(parent), kPlatformTypeX11EmbedWindowID) != kResultOk) {
+            view->setFrame(nullptr);
+            view = nullptr;
+            return false;
+        }
+        ViewRect r{};
+        if (view->getSize(&r) == kResultOk && frame.resize) frame.resize(r.getWidth(), r.getHeight());
+        return true;
+    }
+
+    void closeEditor() override {
+        if (!view) return;
+        view->removed();
+        view->setFrame(nullptr);
+        view = nullptr;
+    }
+
 protected:
     void onValueSet(int i, float v) override {
         if (controller) controller->setParamNormalized(ids[size_t(i)], v);
     }
 
 private:
+    EditHandler handler;
+    EditorFrame frame;
+    IPtr<IPlugView> view;
     VST3::Hosting::Module::Ptr module;
     IPtr<PlugProvider> provider;
     IPtr<IComponent> component;

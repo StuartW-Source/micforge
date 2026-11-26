@@ -3,6 +3,7 @@
 #include "audio/audiobackend.h"
 #include "audio/audiocore.h"
 #include "platform/autostart.h"
+#include "platform/globalshortcuts.h"
 #include "separation.h"
 #include "pluginmanager.h"
 #include "diagnostics.h"
@@ -10,10 +11,13 @@
 #include "levels.h"
 #include "calibprofiles.h"
 #include "detectorspectrum.h"
+#include "undostack.h"
 #include "optional/rnnoise_api.h"
 
+#include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QSettings>
+#include <QUrl>
 #include <QObject>
 #include <QQmlPropertyMap>
 #include <QTimer>
@@ -41,6 +45,17 @@ class Controller : public QObject {
     Q_PROPERTY(DetectorSpectrum *spectrum READ spectrum CONSTANT)
     // Per-microphone Setup: a message after switching mics, and the microphones that have a saved Setup.
     Q_PROPERTY(QString profileNotice READ profileNotice NOTIFY profileNoticeChanged)
+    Q_PROPERTY(QString presetNotice READ presetNotice NOTIFY presetsChanged)
+    // Undo/redo of sound settings ("" when there's nothing to undo/redo).
+    Q_PROPERTY(QString undoText READ undoText NOTIFY undoChanged)
+    // System-wide shortcuts (mute, push-to-talk) through the desktop.
+    Q_PROPERTY(bool shortcutsAvailable READ shortcutsAvailable NOTIFY shortcutsChanged)
+    Q_PROPERTY(bool shortcutsEnabled READ shortcutsEnabled WRITE setShortcutsEnabled NOTIFY shortcutsChanged)
+    Q_PROPERTY(bool pushToTalk READ pushToTalk WRITE setPushToTalk NOTIFY shortcutsChanged)
+    Q_PROPERTY(QString shortcutsStatus READ shortcutsStatus NOTIFY shortcutsChanged)
+    Q_PROPERTY(QString muteKey READ muteKey NOTIFY shortcutsChanged)
+    Q_PROPERTY(QString pushToTalkKey READ pushToTalkKey NOTIFY shortcutsChanged)
+    Q_PROPERTY(QString redoText READ redoText NOTIFY undoChanged)
     Q_PROPERTY(QVariantList micProfiles READ micProfiles NOTIFY profileNoticeChanged)
 
     Q_PROPERTY(QVariantList sources READ sources NOTIFY sourcesChanged)
@@ -111,6 +126,21 @@ public:
     MicTestSession *micTest() { return m_micTest; }
     DetectorSpectrum *spectrum() { return m_spectrum; }
     QString profileNotice() const { return m_profileNotice; }
+    QString presetNotice() const { return m_presetNotice; }
+    QString undoText() const { return m_undo.undoLabel(); }
+    QString redoText() const { return m_undo.redoLabel(); }
+    bool shortcutsAvailable() const { return m_shortcuts && m_shortcuts->available(); }
+    bool shortcutsEnabled() const { return m_shortcutsEnabled; }
+    void setShortcutsEnabled(bool on);
+    bool pushToTalk() const { return m_pushToTalk; }
+    void setPushToTalk(bool on);
+    QString shortcutsStatus() const;
+    QString muteKey() const { return m_shortcuts ? m_shortcuts->triggers().value("mute") : QString(); }
+    QString pushToTalkKey() const { return m_shortcuts ? m_shortcuts->triggers().value("push-to-talk") : QString(); }
+    Q_INVOKABLE void configureShortcuts() { if (m_shortcuts) m_shortcuts->configure(); }
+    Q_INVOKABLE void undo();
+    Q_INVOKABLE void redo();
+    Q_INVOKABLE void dismissPresetNotice() { m_presetNotice.clear(); emit presetsChanged(); }
     QVariantList micProfiles() const;
     Q_INVOKABLE void dismissProfileNotice();
     QVariantList sources() const { return m_sources; }
@@ -169,6 +199,9 @@ public:
     Q_INVOKABLE void savePreset(const QString &name);
     Q_INVOKABLE void deletePreset(const QString &name);
     Q_INVOKABLE bool isBuiltinPreset(const QString &name) const;
+    // Preset files: export one to a file, import a file (returns a plain-English result).
+    Q_INVOKABLE QString exportPreset(const QString &name, const QUrl &file);
+    Q_INVOKABLE QString importPreset(const QUrl &file);
     Q_INVOKABLE void startCalibration();
     Q_INVOKABLE void skipOthers();
     Q_INVOKABLE void startLearnOthers();
@@ -189,6 +222,8 @@ signals:
     void autostartChanged();
     void showWelcomeChanged();
     void themeModeChanged();
+    void undoChanged();
+    void shortcutsChanged();
     void profileNoticeChanged();
     void presetsChanged();
     void calibChanged();
@@ -224,6 +259,21 @@ private:
     QSettings m_settingsStore;
     CalibrationProfiles m_profiles;
     QString m_profileNotice;
+    QString m_presetNotice;
+    std::unique_ptr<mf::IGlobalShortcuts> m_shortcuts;
+    bool m_shortcutsEnabled = false, m_pushToTalk = false;
+    void bindShortcuts();
+    UndoStack m_undo;
+    std::array<double, mf::PARAM_COUNT> m_shadow{}; // last value applied, per parameter (for undo)
+    bool m_recordUndo = false, m_applyingUndo = false;
+    QElapsedTimer m_clock;
+    void applyUndoStep(const UndoStack::Step &step, bool undo);
+    struct UndoGroup { // records everything changed in a scope as one undo step
+        Controller *c;
+        UndoGroup(Controller *ctl, const QString &label) : c(ctl) { c->m_undo.beginGroup(label); }
+        ~UndoGroup() { c->m_undo.endGroup(c->m_clock.elapsed()); emit c->undoChanged(); }
+    };
+    bool applyPresetFile(const QString &path, const QString &name);
     QString sourceDescription(const QString &name) const;
     QVariantMap profileParamValues() const;
     void saveProfileFor(const QString &device);

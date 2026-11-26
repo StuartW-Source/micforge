@@ -2,7 +2,7 @@
 
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
-## [Unreleased]
+## [0.2.0] - 2026-11-26
 
 ### Fixed
 - MicForge failed to start (at login and from the menu) when the optional **rnnoise** or **lilv** library
@@ -21,6 +21,15 @@ All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); ve
 - The login entry is no longer re-pointed at development builds.
 
 ### Added
+- **Presets you can share:** import and export preset files; presets now include your plugins and their
+  settings, and never change your microphone or Setup (older presets did; fixed).
+- **Undo / redo** for every sound setting (Ctrl+Z, Ctrl+Shift+Z, or the arrows at the top).
+- **System-wide shortcuts:** mute and **push-to-talk** from any app (Settings → Keyboard shortcuts).
+- Plugins: block list, a progress bar and Stop for plugin searches, CPU use per plugin, and presets per plugin.
+- **Plugins can run separately** ("Run separately", on by default for VST3): if a plugin crashes or freezes,
+  MicForge and your processed mic keep working and the plugin restarts by itself.
+- **VST3 plugins can open their own window** (when running separately).
+- Presets are included in the daily backup.
 - **No more clicks** when you move a slider, switch an effect on or off, or use Compare: every change glides.
 - **True-peak limiter:** the output never goes over the ceiling, even between samples.
 - **Voice Gate** explains itself ("closed: background noise", "closed: not close enough"…), and ignores

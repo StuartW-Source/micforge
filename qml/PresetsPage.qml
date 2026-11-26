@@ -1,11 +1,15 @@
+import QtCore
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 
 // Presets: switch between saved sound profiles, save the current sound, delete your own presets.
 Flickable {
     id: root
     property var app
+    property string message: ""
+    property string exportName: ""
     contentHeight: body.implicitHeight
     clip: true
     boundsBehavior: Flickable.StopAtBounds
@@ -19,7 +23,7 @@ Flickable {
         Card {
             Layout.fillWidth: true
             title: "Save the current sound"
-            subtitle: "Saves every effect setting, including which effects are in the chain. Your microphone choice and Setup results are kept separately and aren't changed by loading a preset."
+            subtitle: "Saves every effect setting, which effects are in the chain, and your plugins with their settings. Your microphone, input gain and Setup results are kept separately: loading or sharing a preset never changes them."
             RowLayout {
                 Layout.fillWidth: true
                 spacing: Theme.sp2
@@ -52,7 +56,21 @@ Flickable {
             }
         }
 
-        SectionLabel { text: "Presets"; Layout.topMargin: Theme.sp1 }
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.topMargin: Theme.sp1
+            SectionLabel { text: "Presets" }
+            Item { Layout.fillWidth: true }
+            Text { visible: root.message !== ""; text: root.message; color: Theme.textDim; font.pixelSize: Theme.fsBody }
+            PillButton {
+                text: "Import…"
+                implicitHeight: Theme.controlHeightSm
+                enabled: !controller.safeMode
+                onClicked: importDialog.open()
+                ToolTipLite { visible: parent.activeFocus || ih.hovered; text: "Add a preset file someone shared with you (.json). It never changes your microphone Setup." }
+                HoverHandler { id: ih }
+            }
+        }
         Text {
             visible: controller.currentPreset === ""
             text: "You've changed settings since loading a preset (“Custom”). Save them above to keep them."
@@ -97,6 +115,12 @@ Flickable {
                         Accessible.name: "Load " + modelData
                     }
                     PillButton {
+                        text: "Export…"
+                        implicitHeight: Theme.controlHeightSm
+                        onClicked: { root.exportName = modelData; exportDialog.open() }
+                        Accessible.name: "Export " + modelData
+                    }
+                    PillButton {
                         visible: !row.builtin
                         text: "Delete"
                         implicitHeight: Theme.controlHeightSm
@@ -108,6 +132,25 @@ Flickable {
             }
         }
         Item { implicitHeight: Theme.sp2 }
+    }
+
+    FileDialog {
+        id: importDialog
+        title: "Import a MicForge preset"
+        fileMode: FileDialog.OpenFile
+        nameFilters: ["MicForge presets (*.json)", "All files (*)"]
+        currentFolder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
+        onAccepted: root.message = controller.importPreset(selectedFile)
+    }
+    FileDialog {
+        id: exportDialog
+        title: "Export preset"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "json"
+        nameFilters: ["MicForge presets (*.json)"]
+        currentFolder: StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
+        onVisibleChanged: if (visible) selectedFile = currentFolder + "/" + root.exportName.replace(/[\/:*?"<>|]/g, "-") + ".json"
+        onAccepted: root.message = controller.exportPreset(root.exportName, selectedFile)
     }
 
     Popup {

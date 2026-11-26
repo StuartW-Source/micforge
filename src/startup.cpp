@@ -280,6 +280,18 @@ SettingsCheck checkAndBackupSettings() {
     if (!QFileInfo::exists(today) && QFile::copy(file, today)) qInfo("settings: daily backup saved to %s", qPrintable(today));
     QStringList old = QDir(dir).entryList({base + "-20*.conf"}, QDir::Files, QDir::Name);
     while (old.size() > 14) QFile::remove(dir + "/" + old.takeFirst());
+
+    // Sound presets: a copy of the presets folder once a day (14 days kept).
+    const QDir presets(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) + "/presets");
+    const QStringList files = presets.entryList({"*.json"}, QDir::Files);
+    const QString presetCopy = dir + "/presets-" + QDate::currentDate().toString("yyyy-MM-dd");
+    if (!files.isEmpty() && !QFileInfo::exists(presetCopy) && QDir().mkpath(presetCopy)) {
+        int copied = 0;
+        for (const QString &f : files) copied += QFile::copy(presets.filePath(f), presetCopy + "/" + f) ? 1 : 0;
+        qInfo("settings: daily backup of %d preset(s) saved to %s", copied, qPrintable(presetCopy));
+    }
+    QStringList oldPresets = QDir(dir).entryList({"presets-20*"}, QDir::Dirs, QDir::Name);
+    while (oldPresets.size() > 14) QDir(dir + "/" + oldPresets.takeFirst()).removeRecursively();
     return out;
 }
 
