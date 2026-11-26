@@ -21,6 +21,12 @@ All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); ve
 - The login entry is no longer re-pointed at development builds.
 
 ### Added
+- **Presets you can share:** import and export preset files; presets now include your plugins and their
+  settings, and never change your microphone or Setup (older presets did; fixed).
+- **Undo / redo** for every sound setting (Ctrl+Z, Ctrl+Shift+Z, or the arrows at the top).
+- **System-wide shortcuts:** mute and **push-to-talk** from any app (Settings → Keyboard shortcuts).
+- Plugins: block list, a progress bar and Stop for plugin searches, CPU use per plugin, and presets per plugin.
+- Presets are included in the daily backup.
 - **No more clicks** when you move a slider, switch an effect on or off, or use Compare: every change glides.
 - **True-peak limiter:** the output never goes over the ceiling, even between samples.
 - **Voice Gate** explains itself ("closed: background noise", "closed: not close enough"…), and ignores

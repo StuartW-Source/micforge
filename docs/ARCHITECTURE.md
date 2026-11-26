@@ -91,6 +91,18 @@ read this one value.
   level vs recent voiced level; 8 breathy frames in a row → turn down.
 - **Spectrum view.** `ScopeTap` (atomic ring written only while the view is open) → FFT on the UI thread.
 
+## Presets, undo, shortcuts, plugins (Phase 5)
+
+- **Presets** (`src/presetfile.*`): sound settings only; `isSetupKey()` lists what never travels. The plugin
+  chain is stored by format + id + parameter values (`PluginManager::exportChain/importChain`); on import a
+  plugin is resolved from scan results, the current chain, or (LV2) its URI.
+- **Undo** (`src/undostack.h`): recorded in `Controller::applyToEngine`, the one point every change passes;
+  `Controller::UndoGroup` (RAII) groups preset loads, Setup and mic switches.
+- **Global shortcuts** (`src/platform/globalshortcuts*.{h,cpp}`): `IGlobalShortcuts`, XDG portal
+  implementation over Qt D-Bus (request/response signals subscribed before each call).
+- **Plugins**: `PluginRack::load[]` per-slot CPU share (steady_clock around each `process`); block list in
+  settings; plugin presets as files. Out-of-process hosting evaluated in docs/PLUGIN_HOSTING.md.
+
 ## UI structure (Phase 2)
 
 `Main.qml` holds the header (status, Mute, Listen, Compare), the sidebar and page notices, and loads each

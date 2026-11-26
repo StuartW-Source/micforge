@@ -1,8 +1,9 @@
 # MicForge roadmap
 
 Living document. Phases follow the development brief; each phase needs approval before it starts.
-Status: **Phases 1-3 complete (reboot/login autostart confirmed 2026-11-26). Phase 4 complete on branch
-`phase4-dsp`. Phase 5 awaiting approval.**
+Status: **Phases 1-4 complete and merged to `main` (reboot/login autostart confirmed 2026-11-26). Phase 5
+complete on branch `phase5-presets` except plugin editor windows / out-of-process hosting, which await
+approval (see docs/PLUGIN_HOSTING.md).**
 
 ---
 
@@ -161,11 +162,22 @@ the change was made until it passed. Numbers are from `tests/dsp_test.cpp`.
 Not verified: how the adaptive floor and plosive guard behave across many real rooms and voices (synthetic
 tests plus one user's recordings); the voice detector on voices other than the user's.
 
-### Phase 5 — Presets, profiles, shortcuts, plugins
-Versioned preset files (import/export, cross-platform), device profiles, undo/redo, backups.
-Global shortcuts via the XDG GlobalShortcuts portal (mute, push-to-talk). Plugins: blacklist, scan
-progress/cancel, per-plugin CPU, plugin presets, editor windows (X11/XWayland first), and an evaluation of
-out-of-process runtime hosting.
+### Phase 5 — Presets, profiles, shortcuts, plugins (2026-11-26)
+
+| Item | Result |
+|---|---|
+| Versioned preset files | `micforge-preset` v2 (no paths, no device names); v1 files still load; import (never overwrites) / export. **Bug fixed:** user presets used to carry and restore Setup values (gain, gate threshold…), undoing calibration. Presets now include the plugin chain. |
+| Device profiles | Done in Phase 3 (per-microphone Setup). |
+| Undo/redo | 100 steps, slider drags merged, preset load / Setup / mic switch as one step; Ctrl+Z, Ctrl+Shift+Z; header buttons. Plugin parameters not covered yet. |
+| Backups | Presets copied daily with the settings (14 days). |
+| Global shortcuts | GlobalShortcuts portal (Qt D-Bus): mute toggle, push-to-talk (press/release). Off by default; binding only when switched on. |
+| Plugins | Block list, scan progress + stop, per-plugin CPU, plugin presets. |
+| Editor windows, out-of-process hosting | **Evaluated, not built** (docs/PLUGIN_HOSTING.md): needs an X11 helper process; recommended design is a per-plugin bridge process with deadline fallback. Awaiting approval. |
+
+Tests added: presetfile (14), undostack (10), controller (24: undo, presets, import/export, shortcuts and
+push-to-talk with a fake portal), audiocore plugin CPU (3), startup preset backup. Not verified: the
+desktop's shortcut dialog and real key presses, file dialogs, the plugin-preset row (needs an expanded
+plugin card).
 
 ### Phase 6 — Experimental speaker verification (research only, opt-in)
 Benchmark lightweight speaker-embedding models (ONNX Runtime, CPU) against the current DSP approach.

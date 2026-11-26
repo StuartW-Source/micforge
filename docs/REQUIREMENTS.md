@@ -133,6 +133,10 @@ whether a USB mic, headset, or one channel of a multi-input audio interface.
 - R4.6 Settings persist automatically. Sound presets can be saved, and built-in presets never undo
   the user's setup or remove effects they've added.
 - R4.7 Runs in the system tray. Optional start at login, optionally hidden.
+- R4.10 Sound presets are files that can be shared between computers and operating systems. Loading or
+  importing a preset never changes the microphone or Setup. Import never overwrites an existing preset.
+- R4.11 Every sound-setting change can be undone and redone.
+- R4.12 Optional system-wide shortcuts: mute toggle and push-to-talk (muted except while held).
 - R4.8 **Mute** from the window, the tray and a keyboard shortcut. Mute is never saved, so MicForge never
   starts muted. The current state (processing, muted, bypassed, waiting for the mic, disconnected) is
   always visible in the window and the tray.
