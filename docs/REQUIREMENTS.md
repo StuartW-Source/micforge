@@ -131,6 +131,23 @@ whether a USB mic, headset, or one channel of a multi-input audio interface.
   recordings and virtual mic, so development and screenshots never interrupt a live call.
 - R5.5 Automated tests cover the DSP, the voice-separation analysis and the plugin hosts.
 
+## R7. Reliability and start-up
+
+- R7.1 MicForge always starts. A missing *optional* library (rnnoise, lilv) disables only that feature
+  (loaded at run time). Only Qt and the platform audio system are hard requirements.
+- R7.2 One instance per user. A second launch shows the existing window. A frozen instance is detected
+  and can be replaced. Stale locks after a crash are recovered.
+- R7.3 The audio engine retries until the audio system is reachable and reconnects after it restarts,
+  re-creating the virtual microphone. No fixed start-up delays.
+- R7.4 A disconnected input device is never silently replaced by another microphone.
+- R7.5 Safe mode (manual, or automatic after two failed starts) bypasses plugins and saved sound settings
+  and never writes the user's configuration.
+- R7.6 Settings and calibration are never silently deleted: daily backups, damaged files preserved,
+  invalid values fall back to defaults.
+- R7.7 Start-up problems are diagnosable: rotating log file, journal messages, visible error dialogs.
+- R7.8 Start at login uses XDG autostart only (no competing systemd service). It works when the tray
+  isn't ready yet, and the entry always points at an installed copy.
+
 ## R6. Distribution
 
 - R6.1 Open source under **GPL-3.0-or-later**. Bundled parts of Steinberg's VST3 SDK are MIT-licensed
