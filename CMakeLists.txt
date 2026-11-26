@@ -148,6 +148,22 @@ if(MICFORGE_BUILD_TESTS)
     target_link_libraries(presetfile_test PRIVATE Qt6::Core)
     add_test(NAME presetfile COMMAND presetfile_test)
 
+    add_executable(undostack_test tests/undostack_test.cpp)
+    target_include_directories(undostack_test PRIVATE src)
+    target_link_libraries(undostack_test PRIVATE Qt6::Core)
+    add_test(NAME undostack COMMAND undostack_test)
+
+    # Controller (undo, presets, import/export) with private settings folders.
+    get_target_property(_mf_sources micforge SOURCES)
+    list(FILTER _mf_sources EXCLUDE REGEX "src/main\\.cpp$")
+    add_executable(controller_test tests/controller_test.cpp ${_mf_sources})
+    target_include_directories(controller_test PRIVATE src ${LILV_INCLUDE_DIRS})
+    target_compile_definitions(controller_test PRIVATE MICFORGE_VERSION="${PROJECT_VERSION}")
+    target_link_libraries(controller_test PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Network Qt6::Concurrent
+        PkgConfig::PIPEWIRE vst3host Threads::Threads ${CMAKE_DL_LIBS})
+    add_test(NAME controller COMMAND controller_test)
+
     add_executable(autostart_test tests/autostart_test.cpp src/platform/autostart_xdg.cpp)
     target_include_directories(autostart_test PRIVATE src)
     target_link_libraries(autostart_test PRIVATE Qt6::Core)

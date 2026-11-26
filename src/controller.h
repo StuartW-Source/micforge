@@ -10,8 +10,10 @@
 #include "levels.h"
 #include "calibprofiles.h"
 #include "detectorspectrum.h"
+#include "undostack.h"
 #include "optional/rnnoise_api.h"
 
+#include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QSettings>
 #include <QUrl>
@@ -43,6 +45,9 @@ class Controller : public QObject {
     // Per-microphone Setup: a message after switching mics, and the microphones that have a saved Setup.
     Q_PROPERTY(QString profileNotice READ profileNotice NOTIFY profileNoticeChanged)
     Q_PROPERTY(QString presetNotice READ presetNotice NOTIFY presetsChanged)
+    // Undo/redo of sound settings ("" when there's nothing to undo/redo).
+    Q_PROPERTY(QString undoText READ undoText NOTIFY undoChanged)
+    Q_PROPERTY(QString redoText READ redoText NOTIFY undoChanged)
     Q_PROPERTY(QVariantList micProfiles READ micProfiles NOTIFY profileNoticeChanged)
 
     Q_PROPERTY(QVariantList sources READ sources NOTIFY sourcesChanged)
@@ -114,6 +119,10 @@ public:
     DetectorSpectrum *spectrum() { return m_spectrum; }
     QString profileNotice() const { return m_profileNotice; }
     QString presetNotice() const { return m_presetNotice; }
+    QString undoText() const { return m_undo.undoLabel(); }
+    QString redoText() const { return m_undo.redoLabel(); }
+    Q_INVOKABLE void undo();
+    Q_INVOKABLE void redo();
     Q_INVOKABLE void dismissPresetNotice() { m_presetNotice.clear(); emit presetsChanged(); }
     QVariantList micProfiles() const;
     Q_INVOKABLE void dismissProfileNotice();
@@ -196,6 +205,7 @@ signals:
     void autostartChanged();
     void showWelcomeChanged();
     void themeModeChanged();
+    void undoChanged();
     void profileNoticeChanged();
     void presetsChanged();
     void calibChanged();
@@ -232,6 +242,16 @@ private:
     CalibrationProfiles m_profiles;
     QString m_profileNotice;
     QString m_presetNotice;
+    UndoStack m_undo;
+    std::array<double, mf::PARAM_COUNT> m_shadow{}; // last value applied, per parameter (for undo)
+    bool m_recordUndo = false, m_applyingUndo = false;
+    QElapsedTimer m_clock;
+    void applyUndoStep(const UndoStack::Step &step, bool undo);
+    struct UndoGroup { // records everything changed in a scope as one undo step
+        Controller *c;
+        UndoGroup(Controller *ctl, const QString &label) : c(ctl) { c->m_undo.beginGroup(label); }
+        ~UndoGroup() { c->m_undo.endGroup(c->m_clock.elapsed()); emit c->undoChanged(); }
+    };
     bool applyPresetFile(const QString &path, const QString &name);
     QString sourceDescription(const QString &name) const;
     QVariantMap profileParamValues() const;

@@ -148,6 +148,10 @@ Controller::Controller(const StartupInfo &startup, QObject *parent)
     m_meterTimer.setInterval(33);
     connect(&m_meterTimer, &QTimer::timeout, this, &Controller::pollMeters);
     m_meterTimer.start();
+    // From here on, every settings change can be undone.
+    for (int i = 0; i < PARAM_COUNT; ++i) m_shadow[size_t(i)] = m_params.value(kParams[i].key).toDouble();
+    m_clock.start();
+    m_recordUndo = true;
 
     // The voice-separation analysis improved since these recordings were tuned: re-tune once.
     if (!m_startup.safeMode && hasRecordings() && QSettings().value("calib/version", 1).toInt() < kCalibVersion)
@@ -208,7 +212,28 @@ double Controller::defaultValue(const QString &key) const {
     return id < 0 ? 0 : kParams[id].def;
 }
 
+namespace {
+// Plain-English name of the effect or control a parameter belongs to, for "Undo …".
+QString undoLabelFor(const QString &key) {
+    static const std::pair<const char *, const char *> prefixes[] = {
+        {"input", "Input"}, {"noise", "Noise Removal"}, {"hum", "Hum Removal"}, {"lowCut", "Low Cut"},
+        {"gate", "Voice Gate"}, {"breath", "Breath reduction"}, {"autoLevel", "Auto Level"}, {"comp", "Compressor"},
+        {"deess", "De-esser"}, {"vc", "Voice Changer"}, {"eq", "Equaliser"}, {"tone", "Tone"},
+        {"plugins", "Plugins"}, {"warmth", "Warmth"}, {"exciter", "Exciter"}, {"doubler", "Doubler"},
+        {"echo", "Echo"}, {"reverb", "Reverb"}, {"output", "Output"}, {"limiter", "Limiter"}, {"need", "Setup answers"},
+        {"mic", "Setup answers"}};
+    for (const auto &[p, name] : prefixes)
+        if (key.startsWith(QLatin1String(p))) return key.endsWith("Added") ? QString("Add/remove %1").arg(name) : QString(name);
+    return QStringLiteral("setting");
+}
+} // namespace
+
 void Controller::applyToEngine(int id, double value) {
+    if (m_recordUndo && !m_applyingUndo && id != Bypass && id != Mute && value != m_shadow[size_t(id)]) {
+        m_undo.record(kParams[id].key, m_shadow[size_t(id)], value, m_clock.elapsed(), undoLabelFor(kParams[id].key));
+        emit undoChanged();
+    }
+    m_shadow[size_t(id)] = value;
     m_core.params.set(id, float(value));
     if (id != Bypass && id != Mute) m_saveTimer.start();
     if (id == InputGain || id == GateFocus || id == GateScLow || id == GateScHigh) emit zonesChanged();
@@ -341,6 +366,7 @@ void Controller::switchProfile(const QString &from, const QString &to) {
     const QString owner = m_settingsStore.value("calib/device").toString();
     if (valid && (owner.isEmpty() || owner == from)) saveProfileFor(from); // older setups have no owner yet: it's the mic in use
     if (m_profiles.has(to)) {
+        UndoGroup group(this, tr("Switch microphone"));
         const QString preset = m_currentPreset;
         const QVariantMap params = m_profiles.restore(to);
         for (auto it = params.begin(); it != params.end(); ++it) setParam(it.key(), it.value().toDouble());
@@ -375,6 +401,35 @@ QVariantList Controller::micProfiles() const {
 void Controller::dismissProfileNotice() {
     m_profileNotice.clear();
     emit profileNoticeChanged();
+}
+
+void Controller::undo() {
+    if (!m_undo.canUndo()) return;
+    applyUndoStep(m_undo.takeUndo(), true);
+}
+
+void Controller::redo() {
+    if (!m_undo.canRedo()) return;
+    applyUndoStep(m_undo.takeRedo(), false);
+}
+
+void Controller::applyUndoStep(const UndoStack::Step &step, bool undo) {
+    m_applyingUndo = true;
+    bool soundChanged = false;
+    for (int k = 0; k < step.changes.size(); ++k) {
+        const auto &c = step.changes[undo ? step.changes.size() - 1 - k : k];
+        const int id = idForKey(c.key);
+        if (id < 0) continue;
+        const double v = undo ? c.before : c.after;
+        m_params.insert(c.key, v);
+        applyToEngine(id, v);
+        soundChanged |= !isPersonalKey(c.key);
+    }
+    m_applyingUndo = false;
+    if (soundChanged && !m_currentPreset.isEmpty()) m_currentPreset.clear();
+    emit presetsChanged();
+    emit zonesChanged();
+    emit undoChanged();
 }
 
 void Controller::updateMonitorStream() { m_backend->setMonitor(m_monitor || m_testPlayback); }
@@ -445,6 +500,7 @@ bool Controller::isBuiltinPreset(const QString &name) const {
 }
 
 void Controller::loadPreset(const QString &name) {
+    UndoGroup group(this, tr("Load preset “%1”").arg(name));
     m_presetNotice.clear();
     for (const auto &p : builtinPresets()) {
         if (name != p.name) continue;
@@ -826,6 +882,7 @@ void Controller::startAnalysis() {
 }
 
 void Controller::applyAnalysis(const SeparationResult &r) {
+    UndoGroup group(this, tr("Setup"));
     if (m_calibPhase != "analysing") return; // cancelled meanwhile
     QVariantMap out;
     out["learning"] = m_learning;
