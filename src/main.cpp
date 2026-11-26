@@ -7,6 +7,7 @@
 #include <QCommandLineParser>
 #include <QIcon>
 #include <QMenu>
+#include <QPainter>
 #include <QMessageBox>
 #include <QProcess>
 #include <QQmlApplicationEngine>
@@ -19,6 +20,31 @@
 #include <cstring>
 
 using namespace mf;
+
+// Tray icon for the current state: muted = red slash, bypassed = amber dot, problem = grey with red dot.
+static QIcon trayIconFor(const QString &state) {
+    const QIcon base = QIcon::fromTheme("micforge", QIcon(":/icons/micforge.svg"));
+    QPixmap pm = base.pixmap(64, 64);
+    if (pm.isNull() || state == "processing") return base;
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    if (state == "muted") {
+        p.setPen(QPen(QColor("#ff5c5c"), 9, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(10, 54, 54, 10);
+    } else {
+        const bool problem = state != "bypassed";
+        if (problem) {
+            p.setCompositionMode(QPainter::CompositionMode_SourceAtop);
+            p.fillRect(pm.rect(), QColor(40, 40, 40, 150));
+            p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+        }
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(problem ? "#ff5c5c" : "#ffd24d"));
+        p.drawEllipse(QRectF(38, 38, 24, 24));
+    }
+    p.end();
+    return QIcon(pm);
+}
 
 static void showWindow(QQuickWindow *w) {
     w->show();
@@ -135,17 +161,34 @@ int main(int argc, char *argv[]) {
     QSystemTrayIcon tray(QIcon::fromTheme("micforge", QIcon(":/icons/micforge.svg")));
     tray.setToolTip("MicForge — mic processing is running");
     QMenu menu;
-    QAction *showAct = menu.addAction(QIcon::fromTheme("window"), "Show MicForge");
-    QAction *bypassAct = menu.addAction("Bypass processing");
+    QAction *stateAct = menu.addAction(controller.appStateText());
+    stateAct->setEnabled(false);
+    menu.addSeparator();
+    QAction *muteAct = menu.addAction(QIcon::fromTheme("microphone-sensitivity-muted"), "Mute microphone");
+    muteAct->setCheckable(true);
+    QAction *showAct = menu.addAction(QIcon::fromTheme("window"), "Open MicForge");
+    QAction *bypassAct = menu.addAction("Bypass processing (send raw mic)");
     bypassAct->setCheckable(true);
     QAction *listenAct = menu.addAction("Listen to myself");
     listenAct->setCheckable(true);
     QAction *restartAct = menu.addAction(QIcon::fromTheme("view-refresh"), "Restart audio engine");
     menu.addSeparator();
-    QAction *quitAct = menu.addAction(QIcon::fromTheme("application-exit"), "Quit MicForge");
+    QAction *quitAct = menu.addAction(QIcon::fromTheme("application-exit"), "Quit MicForge (stops processing)");
     tray.setContextMenu(&menu);
 
     QObject::connect(showAct, &QAction::triggered, [&] { showWindow(window); });
+    QObject::connect(muteAct, &QAction::toggled, &controller, &Controller::setMuted);
+    auto refreshTray = [&] {
+        const QString st = controller.appState();
+        tray.setIcon(trayIconFor(st));
+        tray.setToolTip("MicForge — " + controller.appStateText());
+        stateAct->setText(controller.appStateText());
+        const QSignalBlocker b1(muteAct), b2(bypassAct);
+        muteAct->setChecked(controller.muted());
+        bypassAct->setChecked(controller.params()->value("bypass").toDouble() > 0.5);
+    };
+    QObject::connect(&controller, &Controller::statusChanged, &tray, refreshTray);
+    refreshTray();
     QObject::connect(bypassAct, &QAction::toggled, [&](bool on) { controller.setParam("bypass", on ? 1 : 0); });
     QObject::connect(listenAct, &QAction::toggled, &controller, &Controller::setMonitor);
     QObject::connect(restartAct, &QAction::triggered, &controller, &Controller::restartEngine);

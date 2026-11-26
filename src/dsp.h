@@ -423,6 +423,17 @@ public:
             outPk = std::max(outPk, std::fabs(x));
         }
 
+        // Mute: 10 ms linear fade to exact silence, then hold it. Applies in bypass too, so a muted mic
+        // never sends audio. Un-muting fades back in the same way (no clicks either way).
+        if (muted || muteGain < 1.0f) {
+            outPk = 0;
+            for (int i = 0; i < n; ++i) {
+                muteGain = muted ? std::max(0.0f, muteGain - muteStep) : std::min(1.0f, muteGain + muteStep);
+                out[i] *= muteGain;
+                outPk = std::max(outPk, std::fabs(out[i]));
+            }
+        }
+
         Meters::bump(m.inPeak, linToDb(inPk));
         Meters::bump(m.outPeak, linToDb(outPk));
         if (bypass) return;
@@ -452,6 +463,8 @@ private:
         channel = int(p.get(InputChannel) + 0.5f);
         inGain = dbToLin(p.get(InputGain));
         bypass = p.get(Bypass) > 0.5f;
+        muted = p.get(Mute) > 0.5f;
+        muteStep = 1.0f / (0.010f * fs);
 
         auto active = [&](int added, int on) { return p.get(added) > 0.5f && p.get(on) > 0.5f; };
         noiseOn = active(NoiseAdded, NoiseOn);
@@ -602,6 +615,8 @@ private:
     bool toneActive[3] = {false, false, false};
 
     bool pluginsOn = false;
+    bool muted = false;
+    float muteGain = 1.0f, muteStep = 1.0f / 480.0f;
     bool alOn = false, vcOn = false, warmOn = false, exOn = false, dblOn = false, echoOn = false, revOn = false;
     AutoLevel al;
     VoiceChanger vc;

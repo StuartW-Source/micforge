@@ -347,6 +347,24 @@ int main() {
         for (float x : out) finite &= std::isfinite(x);
         check(finite && peakDb(out) <= -0.99, "all effects at extremes: finite, never above ceiling", peakDb(out));
     }
+    { // Mute: silence within ~25 ms, no click (gain changes smoothly), and it applies in bypass too.
+        Params p; allOff(p);
+        VoiceChain c(48000); Meters m;
+        auto in = tone(1000, -6, N);
+        std::vector<float> out(N);
+        c.process(in.data(), 2, out.data(), 4800, p, m);                   // 100 ms unmuted
+        p.set(Mute, 1);
+        c.process(in.data() + 9600, 2, out.data() + 4800, 4800, p, m);    // muted
+        float maxStep = 0, tail = 0;
+        for (int i = 4801; i < 4800 + 240; ++i) maxStep = std::max(maxStep, std::fabs(std::fabs(out[i]) - std::fabs(out[i - 1])));
+        for (int i = 4800 + 480; i < 9600; ++i) tail = std::max(tail, std::fabs(out[i]));
+        check(tail < 1e-5f, "mute: exact silence after 10 ms", linToDb(tail));
+        check(maxStep < 0.2f, "mute: fades instead of clicking", maxStep);
+        p.set(Bypass, 1);
+        c.process(in.data() + 19200, 2, out.data(), 4800, p, m);
+        float pk = 0; for (int i = 0; i < 4800; ++i) pk = std::max(pk, std::fabs(out[i]));
+        check(pk < 1e-5f, "mute: also silences bypass (raw mic never sent)", linToDb(pk));
+    }
     std::printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }

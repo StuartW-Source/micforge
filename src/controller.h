@@ -50,6 +50,12 @@ class Controller : public QObject {
     Q_PROPERTY(bool engineOk READ engineOk NOTIFY statusChanged)
     Q_PROPERTY(QString engineState READ engineState NOTIFY statusChanged)  // running / reconnecting / stopped
     Q_PROPERTY(QString engineError READ engineError NOTIFY statusChanged)
+    // One overall state for the window, tray and diagnostics:
+    // disconnected / connecting / no-input / muted / bypassed / processing
+    Q_PROPERTY(QString appState READ appState NOTIFY statusChanged)
+    Q_PROPERTY(QString appStateText READ appStateText NOTIFY statusChanged)
+    Q_PROPERTY(bool muted READ muted WRITE setMuted NOTIFY statusChanged)
+    Q_PROPERTY(QString backendName READ backendName CONSTANT)
     Q_PROPERTY(bool safeMode READ safeMode CONSTANT)
     Q_PROPERTY(QString safeModeReason READ safeModeReason CONSTANT)
     Q_PROPERTY(QString damagedSettingsCopy READ damagedSettingsCopy CONSTANT)
@@ -89,6 +95,11 @@ public:
     bool engineOk() const { return m_backend->connected(); }
     QString backendName() const { return QString::fromStdString(m_backend->name()); }
     QString engineState() const;
+    QString appState() const;
+    QString appStateText() const;
+    bool muted() const { return m_params.value("mute").toDouble() > 0.5; }
+    void setMuted(bool on) { setParam("mute", on ? 1 : 0); }
+    Q_INVOKABLE void toggleMute() { setMuted(!muted()); }
     QString engineError() const;
     bool safeMode() const { return m_startup.safeMode; }
     QString safeModeReason() const { return m_startup.safeModeReason; }

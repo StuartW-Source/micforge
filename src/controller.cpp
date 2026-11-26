@@ -45,7 +45,7 @@ const QList<BuiltinPreset> &builtinPresets() {
 // Settings that belong to this mic/room, not to a sound style. Built-in presets never touch them,
 // so loading a preset doesn't undo the voice-separation setup or remove added effects.
 bool isPersonalKey(const QString &k) {
-    static const QStringList keys = {"inputChannel", "inputGain", "gateThreshold", "gateHysteresis",
+    static const QStringList keys = {"mute", "inputChannel", "inputGain", "gateThreshold", "gateHysteresis",
                                      "gateFocus", "gateScLow", "gateScHigh", "gateCloseCheck", "gateTilt", "gateTiltDir",
                                      "micType", "needOthers", "needNoise", "needBroadcast", "bypass"};
     return keys.contains(k) || k.endsWith("Added");
@@ -76,7 +76,9 @@ Controller::Controller(const StartupInfo &startup, QObject *parent)
         m_params.insert(kParams[i].key, v);
         m_core.params.set(i, float(v));
     }
-    m_core.params.set(Bypass, 0); // never start bypassed
+    m_core.params.set(Bypass, 0); // never start bypassed or muted
+    m_core.params.set(Mute, 0);
+    m_params.insert("mute", 0);
     m_params.insert("bypass", 0);
     m_currentSource = s.value("source").toString();
     m_currentPreset = s.value("preset", builtinPresets().first().name).toString();
@@ -190,7 +192,7 @@ double Controller::defaultValue(const QString &key) const {
 
 void Controller::applyToEngine(int id, double value) {
     m_core.params.set(id, float(value));
-    if (id != Bypass) m_saveTimer.start();
+    if (id != Bypass && id != Mute) m_saveTimer.start();
     if (id == InputGain || id == GateFocus || id == GateScLow || id == GateScHigh) emit zonesChanged();
 }
 
@@ -199,6 +201,7 @@ void Controller::onParamEdited(const QString &key, const QVariant &value) {
     if (id < 0) return;
     const double v = std::clamp(value.toDouble(), double(kParams[id].min), double(kParams[id].max));
     applyToEngine(id, v);
+    if (id == Bypass || id == Mute) emit statusChanged();
     if (!isPersonalKey(key) && !m_currentPreset.isEmpty()) {
         m_currentPreset.clear();
         emit presetsChanged();
@@ -226,7 +229,7 @@ void Controller::saveNow() {
     if (m_startup.safeMode) return; // safe mode never overwrites the user's configuration
     QSettings s;
     for (int i = 0; i < PARAM_COUNT; ++i)
-        if (i != Bypass) s.setValue(QString("params/") + kParams[i].key, m_params.value(kParams[i].key));
+        if (i != Bypass && i != Mute) s.setValue(QString("params/") + kParams[i].key, m_params.value(kParams[i].key));
     s.setValue("source", m_currentSource);
     s.setValue("preset", m_currentPreset);
     s.setValue("showWelcome", m_showWelcome);
@@ -348,6 +351,7 @@ void Controller::loadPreset(const QString &name) {
         if (!f.open(QIODevice::ReadOnly)) return;
         values = QJsonDocument::fromJson(f.readAll()).object().toVariantMap();
         values.remove("bypass");
+        values.remove("mute");
     }
     for (auto it = values.begin(); it != values.end(); ++it) {
         const int id = idForKey(it.key());
@@ -365,7 +369,7 @@ void Controller::savePreset(const QString &rawName) {
     QDir().mkpath(presetDir());
     QJsonObject o;
     for (int i = 0; i < PARAM_COUNT; ++i)
-        if (i != Bypass) o[kParams[i].key] = m_params.value(kParams[i].key).toDouble();
+        if (i != Bypass && i != Mute) o[kParams[i].key] = m_params.value(kParams[i].key).toDouble();
     QFile f(presetDir() + "/" + name + ".json");
     if (!f.open(QIODevice::WriteOnly)) return;
     f.write(QJsonDocument(o).toJson());
@@ -842,6 +846,24 @@ void Controller::restartEngine() {
 QString Controller::engineState() const {
     if (m_backend->connected()) return QStringLiteral("running");
     return m_engineRetry.isActive() ? QStringLiteral("reconnecting") : QStringLiteral("stopped");
+}
+
+QString Controller::appState() const {
+    if (!m_backend->connected()) return m_engineRetry.isActive() ? "connecting" : "disconnected";
+    if (!m_backend->inputRunning()) return "no-input";
+    if (muted()) return "muted";
+    if (m_params.value("bypass").toDouble() > 0.5) return "bypassed";
+    return "processing";
+}
+
+QString Controller::appStateText() const {
+    const QString s = appState();
+    if (s == "disconnected") return tr("Audio engine stopped");
+    if (s == "connecting") return tr("Connecting to %1…").arg(backendName());
+    if (s == "no-input") return m_currentSource.isEmpty() ? tr("No microphone selected") : tr("Microphone not connected");
+    if (s == "muted") return tr("Muted: apps hear silence");
+    if (s == "bypassed") return tr("Bypassed: apps hear your raw mic");
+    return virtualMicInUse() ? tr("Live: an app is using MicForge") : tr("Ready: pick “MicForge” as your mic in any app");
 }
 
 QString Controller::engineError() const { return QString::fromStdString(m_backend->error()); }
