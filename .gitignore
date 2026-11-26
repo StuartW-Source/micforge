@@ -1,5 +1,6 @@
 # Build output
 /build/
+/build-cmake/
 *.o
 moc_*.cpp
 moc_*.h
