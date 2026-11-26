@@ -49,6 +49,31 @@ static std::vector<float> run(Params &p, const std::vector<float> &in) {
     return out;
 }
 
+// Run `in`, applying `change` to the params at block boundary `atFrame` (multiple of 256).
+template <typename F>
+static std::vector<float> runChange(Params &p, const std::vector<float> &in, int atFrame, F change) {
+    VoiceChain chain(48000);
+    Meters m;
+    const int frames = int(in.size() / 2);
+    std::vector<float> out(frames);
+    for (int i = 0; i < frames; i += 256) {
+        if (i == atFrame) change(p);
+        chain.process(in.data() + 2 * i, 2, out.data() + i, std::min(256, frames - i), p, m);
+    }
+    return out;
+}
+// How much sharper the sharpest corner (second difference) is around `at` than in the steady signal
+// before or after the change. ~1 = a smooth transition; a click from an instant jump scores far higher.
+static double clickRatio(const std::vector<float> &y, int at) {
+    auto maxD2 = [&](int from, int to) {
+        double m = 0;
+        for (int i = std::max(2, from); i < to; ++i) m = std::max(m, double(std::fabs(y[i] - 2 * y[i - 1] + y[i - 2])));
+        return m;
+    };
+    const double steady = std::max(maxD2(at - 4000, at - 2000), maxD2(at + 6000, at + 8000));
+    return maxD2(at - 64, at + 1440) / std::max(1e-9, steady);
+}
+
 static void allOff(Params &p) {
     p.set(InputGain, 0); p.set(LowCutOn, 0); p.set(GateOn, 0); p.set(CompOn, 0);
     p.set(ToneOn, 0); p.set(LimiterOn, 0); p.set(OutputGain, 0);
@@ -365,6 +390,39 @@ int main() {
         c.process(in.data() + 19200, 2, out.data(), 4800, p, m);
         float pk = 0; for (int i = 0; i < 4800; ++i) pk = std::max(pk, std::fabs(out[i]));
         check(pk < 1e-5f, "mute: also silences bypass (raw mic never sent)", linToDb(pk));
+    }
+    // ---- Phase 4: no clicks when settings change (parameter smoothing everywhere).
+    {
+        const int at = 24064; // block boundary, mid-cycle of the 1 kHz tone
+        auto in = tone(1000, -20, N);
+        struct Case { const char *name; void (*setup)(Params &); void (*change)(Params &); };
+        const Case cases[] = {
+            {"smoothing: input gain +12 dB step", [](Params &) {}, [](Params &q) { q.set(InputGain, 12); }},
+            {"smoothing: output gain +12 dB step", [](Params &) {}, [](Params &q) { q.set(OutputGain, 12); }},
+            {"smoothing: EQ band to +12 dB", [](Params &q) { q.set(EqAdded, 1); q.set(EqOn, 1); q.set(Eq3Freq, 1000); },
+             [](Params &q) { q.set(Eq3Gain, 12); }},
+            {"smoothing: Tone presence to +10 dB", [](Params &q) { q.set(ToneOn, 1); }, [](Params &q) { q.set(TonePresence, 10); }},
+            {"smoothing: compressor boost +12 dB", [](Params &q) { q.set(CompOn, 1); q.set(CompThreshold, 0); },
+             [](Params &q) { q.set(CompMakeup, 12); }},
+            {"smoothing: switching the EQ on", [](Params &q) { q.set(EqAdded, 1); q.set(EqOn, 0); q.set(Eq3Freq, 1000); q.set(Eq3Gain, 12); },
+             [](Params &q) { q.set(EqOn, 1); }},
+            {"smoothing: switching Compare (bypass) on", [](Params &q) { q.set(OutputGain, 12); },
+             [](Params &q) { q.set(Bypass, 1); }},
+            {"smoothing: Echo mix 10% -> 70%", [](Params &q) { q.set(EchoAdded, 1); q.set(EchoOn, 1); q.set(EchoMix, 10); q.set(EchoTime, 20); q.set(EchoFeedback, 0); },
+             [](Params &q) { q.set(EchoMix, 70); }},
+            {"smoothing: Doubler mix 10% -> 90%", [](Params &q) { q.set(DoublerAdded, 1); q.set(DoublerOn, 1); q.set(DoublerMix, 10); },
+             [](Params &q) { q.set(DoublerMix, 90); }},
+            {"smoothing: Warmth amount 0% -> 100%", [](Params &q) { q.set(WarmthAdded, 1); q.set(WarmthOn, 1); q.set(WarmthAmount, 0); },
+             [](Params &q) { q.set(WarmthAmount, 100); }},
+            {"smoothing: switching Warmth off", [](Params &q) { q.set(WarmthAdded, 1); q.set(WarmthOn, 1); q.set(WarmthAmount, 80); },
+             [](Params &q) { q.set(WarmthOn, 0); }},
+        };
+        for (const Case &c : cases) {
+            Params p; allOff(p); c.setup(p);
+            auto out = runChange(p, in, at, c.change);
+            const double r = clickRatio(out, at);
+            check(r < 2.5, c.name, r);
+        }
     }
     { // Level analysis (mic test / Setup): speech vs noise floor, clipping, envelope.
         std::vector<float> x(48000 * 4);

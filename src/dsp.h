@@ -139,6 +139,75 @@ inline float onePole(float ms, float fs) {
     return ms <= 0 ? 0.0f : std::exp(-1.0f / (0.001f * ms * fs));
 }
 
+// ---------------------------------------------------------------- smoothing (no clicks on changes)
+
+// A value that glides to its target (one-pole, ~10 ms) instead of jumping.
+struct Smoothed {
+    float cur = 0, target = 0, k = 0.0021f; // k = 1 - onePole(10 ms, 48 kHz)
+    void configure(float fs, float ms = 10.0f) { k = 1.0f - onePole(ms, fs); }
+    void set(float v, bool jump) { target = v; if (jump) cur = v; }
+    inline float next() {
+        if (cur != target) {
+            cur += k * (target - cur);
+            if (std::fabs(target - cur) < 1e-6f * (1.0f + std::fabs(target))) cur = target;
+        }
+        return cur;
+    }
+};
+
+// A biquad whose frequency, Q and gain glide to new settings (coefficients updated every 16 samples).
+struct SmoothBiquad {
+    Biquad bq;
+    Biquad::Type type = Biquad::Peak;
+    double f = 1000, q = 0.7071, g = 0, tf = 1000, tq = 0.7071, tg = 0, k = 0.022, fs = 48000;
+    int tick = 0;
+    bool init = false;
+    void set(Biquad::Type t, double sampleRate, double freq, double Q, double gainDb, bool jump) {
+        fs = sampleRate;
+        k = 1.0 - std::exp(-16.0 / (0.015 * fs)); // ~15 ms glide
+        tf = freq; tq = Q; tg = gainDb;
+        if (jump || !init || t != type) {
+            type = t; f = tf; q = tq; g = tg; init = true;
+            bq.set(type, fs, f, q, g);
+        }
+    }
+    bool moving() const { return f != tf || q != tq || g != tg; }
+    // True if the filter currently does anything (or is still gliding back to flat).
+    bool audible() const { return moving() || std::fabs(g) > 0.05 || (type != Biquad::Peak && type != Biquad::LowShelf && type != Biquad::HighShelf); }
+    void reset() { bq.reset(); }
+    inline float process(float x) {
+        if (moving() && (++tick & 15) == 0) step();
+        return bq.process(x);
+    }
+    void step() {
+        f *= std::pow(tf / f, k);
+        q *= std::pow(tq / q, k);
+        g += k * (tg - g);
+        if (std::fabs(f / tf - 1) < 1e-4) f = tf;
+        if (std::fabs(q / tq - 1) < 1e-4) q = tq;
+        if (std::fabs(g - tg) < 0.005) g = tg;
+        bq.set(type, fs, f, q, g);
+    }
+};
+
+// Crossfades a stage in and out (10 ms) when it's switched on or off, instead of cutting.
+struct StageFade {
+    float mix = 0, stepSize = 1.0f / 480.0f;
+    bool on = false;
+    void set(bool target, bool jump, float fs) {
+        stepSize = 1.0f / (0.010f * fs);
+        on = target;
+        if (jump) mix = on ? 1.0f : 0.0f;
+    }
+    bool running() const { return on || mix > 0.0f; }
+    bool starting() const { return on && mix == 0.0f; } // the stage's state should be cleared first
+    inline float apply(float dry, float wet) {
+        if (on) { if (mix < 1.0f) mix = std::min(1.0f, mix + stepSize); }
+        else if (mix > 0.0f) mix = std::max(0.0f, mix - stepSize);
+        return mix >= 1.0f ? wet : dry + mix * (wet - dry);
+    }
+};
+
 // What the gate "hears": optional band filter + fast envelope follower.
 // Shared by the live gate and the voice-separation analysis so they agree exactly.
 struct GateDetector {
@@ -228,10 +297,7 @@ public:
         for (auto &b : tone) b.reset();
         for (auto &b : eq) b.reset();
         deHp.reset();
-        det.reset();
-        tilt.reset();
-        gateIsOpen = false; gateHoldLeft = 0; gateGainDb = 0;
-        gDelay.fill(0); gPos = 0;
+        resetGate();
         compGrDb = 0; limGain = 1; limPos = 0;
         limDelay.fill(0); limAbs.fill(0);
         deEnv = 0; deRed = 0;
@@ -242,6 +308,43 @@ public:
 
     // in: interleaved frames with inChannels channels. out: mono.
     void process(const float *in, int inChannels, float *out, int n, const Params &p, Meters &m) {
+        while (n > kMaxBlock) { // the bypass crossfade keeps one block of raw input
+            processBlock(in, inChannels, out, kMaxBlock, p, m);
+            in += size_t(kMaxBlock) * size_t(inChannels);
+            out += kMaxBlock;
+            n -= kMaxBlock;
+        }
+        processBlock(in, inChannels, out, n, p, m);
+    }
+
+private:
+    void resetGate() {
+        det.reset();
+        tilt.reset();
+        gateIsOpen = false; gateHoldLeft = 0; gateGainDb = 0;
+        gDelay.fill(0); gPos = 0;
+    }
+
+    // A stage that is about to fade in starts from a clean state (no stale filter memory or tails).
+    void resetStartingStages() {
+        if (fLowCut.starting()) for (auto &b : lowCut) b.reset();
+        if (fGate.starting()) resetGate();
+        if (fAl.starting()) al.reset();
+        if (fComp.starting()) compGrDb = 0;
+        if (fDeess.starting()) { deHp.reset(); deShelf.reset(); deEnv = deRed = 0; }
+        if (fVc.starting()) { vc.reset(); vcLo.reset(); vcHi.reset(); vcBpHp.reset(); vcBpLp.reset(); }
+        if (fEq.starting()) for (auto &b : eq) b.reset();
+        if (fTone.starting()) for (auto &b : tone) b.reset();
+        if (fWarm.starting()) warm.reset();
+        if (fEx.starting()) { exHp.reset(); exHp2.reset(); }
+        if (fDbl.starting()) dbl.reset();
+        if (fEcho.starting()) echo.reset();
+        if (fRev.starting()) rev.reset();
+        if (fLim.starting()) { limGain = 1; limDelay.fill(0); limAbs.fill(0); }
+        if (fNoise.starting()) { nIn.fill(0); nOut.fill(0); nDry.fill(0); nPos = 0; }
+    }
+
+    void processBlock(const float *in, int inChannels, float *out, int n, const Params &p, Meters &m) {
 #if defined(__x86_64__) || defined(__i386__)
         // Flush denormals to zero for this thread (cheap, avoids CPU spikes on silence).
         _mm_setcsr(_mm_getcsr() | 0x8040);
@@ -256,6 +359,10 @@ public:
               deRedMax = 0, vadMax = 0;
         bool anyOpen = false;
 
+        // Fully bypassed (and not fading): raw mic with input gain only.
+        const bool fullBypass = fBypass.on && fBypass.mix >= 1.0f;
+        if (!fullBypass) resetStartingStages();
+
         for (int i = 0; i < n; ++i) {
             // 1. Input: pick channel, apply gain.
             float x;
@@ -263,39 +370,42 @@ public:
             if (inChannels < 2 || channel == 0) x = f[0];
             else if (channel == 1) x = f[1];
             else x = 0.5f * (f[0] + f[1]);
-            x *= inGain;
+            x *= inGainS.next();
             inPk = std::max(inPk, std::fabs(x));
+            raw[i] = x;
 
-            if (bypass) {
+            if (fullBypass) {
                 out[i] = x;
                 outPk = std::max(outPk, std::fabs(x));
                 continue;
             }
 
             // 2. AI noise removal (RNNoise works on 480-sample frames: 10 ms delay).
-            if (noiseOn && denoise) {
+            if (fNoise.running() && denoise) {
                 const float wet = nOut[nPos] * (1.0f / 32768.0f);
                 const float dry = nDry[nPos];
                 nIn[nPos] = x * 32768.0f;
                 nDry[nPos] = x;
-                x = dry + (wet - dry) * noiseMix;
+                const float y = dry + (wet - dry) * noiseMixS.next();
                 if (++nPos == kNoiseFrame) {
                     nPos = 0;
                     lastVad = mf::rnnoise::processFrame(denoise, nOut.data(), nIn.data());
                 }
                 vadMax = std::max(vadMax, lastVad);
+                x = fNoise.apply(x, y);
             }
 
             // 3. Low cut (removes rumble, desk thumps, plosive boom).
-            if (lowCutOn) {
-                x = lowCut[0].process(x);
-                if (lowCutSteep) x = lowCut[1].process(x);
+            if (fLowCut.running()) {
+                float y = lowCut[0].process(x);
+                if (lowCutSteep) y = lowCut[1].process(y);
+                x = fLowCut.apply(x, y);
             }
 
             // 4. Gate / expander. The detector listens to a filtered band; the audio
             //    itself is delayed slightly (look-ahead) so word starts aren't clipped.
             if (recorder) recorder->push(x);
-            if (gateOn) {
+            if (fGate.running()) {
                 const float env = det.process(x);
                 gateLvl = std::max(gateLvl, env);
                 tilt.process(x);
@@ -327,14 +437,14 @@ public:
                 const float c = target > gateGainDb ? gAtk : gRel;
                 gateGainDb = target + (gateGainDb - target) * c;
                 gateRed = std::max(gateRed, -gateGainDb);
-                x = delayed * dbToLin(gateGainDb);
+                x = fGate.apply(x, delayed * dbToLin(gateGainDb));
             }
 
             // 4b. Auto level: steer your speaking level to a target (frozen in pauses).
-            if (alOn) x = al.process(x, gateOn ? gateIsOpen : true);
+            if (fAl.running()) x = fAl.apply(x, al.process(x, fGate.on ? gateIsOpen : true));
 
             // 5. Compressor (feed-forward, soft knee, log domain).
-            if (compOn) {
+            if (fComp.running()) {
                 const float xl = linToDb(std::fabs(x));
                 compLvlDb = std::max(compLvlDb, xl);
                 float yg;
@@ -348,11 +458,11 @@ public:
                 const float c = gr > compGrDb ? cAtk : cRel;
                 compGrDb = gr + (compGrDb - gr) * c;
                 compRed = std::max(compRed, compGrDb);
-                x *= dbToLin(cMakeup - compGrDb);
+                x = fComp.apply(x, x * dbToLin(cMakeupS.next() - compGrDb));
             }
 
             // 6. De-esser: a high shelf that dips only while the "S" band is too loud.
-            if (deessOn) {
+            if (fDeess.running()) {
                 const float a = std::fabs(deHp.process(x));
                 deEnv = a > deEnv ? deAtk * deEnv + (1 - deAtk) * a : deRel * deEnv + (1 - deRel) * a;
                 const float over = linToDb(deEnv) - deThr;
@@ -363,47 +473,51 @@ public:
                     deShelfDb = deRed;
                     deShelf.set(Biquad::HighShelf, fs, deFreq * 0.7f, 0.7071, -deRed);
                 }
-                x = deShelf.process(x);
+                x = fDeess.apply(x, deShelf.process(x));
             }
 
             // 6b. Voice changer (fun).
-            if (vcOn) x = vc.process(x, vcLo, vcHi, vcBpHp, vcBpLp);
+            if (fVc.running()) x = fVc.apply(x, vc.process(x, vcLo, vcHi, vcBpHp, vcBpLp));
 
             // 7. Equaliser.
-            if (eqOn) {
+            if (fEq.running()) {
+                float y = x;
                 for (int b = 0; b < 5; ++b)
-                    if (eqActive[b]) x = eq[b].process(x);
+                    if (eq[b].audible()) y = eq[b].process(y);
+                x = fEq.apply(x, y);
             }
 
             // 8. Tone.
-            if (toneOn) {
+            if (fTone.running()) {
+                float y = x;
                 for (int b = 0; b < 3; ++b)
-                    if (toneActive[b]) x = tone[b].process(x);
+                    if (tone[b].audible()) y = tone[b].process(y);
+                x = fTone.apply(x, y);
             }
 
             out[i] = x;
         }
 
         // 8a. Your plugins (VST3 / LV2). They work on whole blocks, so they run between two sample loops.
-        if (!bypass && pluginsOn && blockHook) blockHook(blockCtx, out, n);
+        if (!fullBypass && pluginsOn && blockHook) blockHook(blockCtx, out, n);
 
-        for (int i = 0; i < n && !bypass; ++i) {
+        for (int i = 0; i < n && !fullBypass; ++i) {
             float x = out[i];
 
             // 8b. Character and space.
-            if (warmOn) x = warm.process(x);
-            if (exOn) {
+            if (fWarm.running()) x = fWarm.apply(x, warm.process(x));
+            if (fEx.running()) {
                 // Full-wave rectifying the treble creates new harmonics an octave up: "sparkle".
                 const float hp = exHp.process(x);
-                x += exAmt * (0.6f * exHp2.process(std::fabs(hp)) + 0.35f * hp);
+                x = fEx.apply(x, x + exAmtS.next() * (0.6f * exHp2.process(std::fabs(hp)) + 0.35f * hp));
             }
-            if (dblOn) x = dbl.process(x);
-            if (echoOn) x = echo.process(x);
-            if (revOn) x = rev.process(x);
+            if (fDbl.running()) x = fDbl.apply(x, dbl.process(x));
+            if (fEcho.running()) x = fEcho.apply(x, echo.process(x));
+            if (fRev.running()) x = fRev.apply(x, rev.process(x));
 
             // 9. Output gain then limiter (never lets the signal clip).
-            x *= outGain;
-            if (limiterOn) {
+            x *= outGainS.next();
+            if (fLim.running()) {
                 limDelay[limPos] = x;
                 limAbs[limPos] = std::fabs(x);
                 limPos = (limPos + 1) & kLimMask;
@@ -416,8 +530,11 @@ public:
                 float y = limDelay[(limPos - limLookahead) & kLimMask] * limGain;
                 y = std::clamp(y, -limCeil, limCeil);
                 limRed = std::max(limRed, -linToDb(limGain));
-                x = y;
+                x = fLim.apply(x, y);
             }
+
+            // Compare (bypass) crossfades between processed and raw instead of switching abruptly.
+            x = fBypass.apply(x, raw[i]);
 
             out[i] = x;
             outPk = std::max(outPk, std::fabs(x));
@@ -436,9 +553,9 @@ public:
 
         Meters::bump(m.inPeak, linToDb(inPk));
         Meters::bump(m.outPeak, linToDb(outPk));
-        if (bypass) return;
-        if (noiseOn) Meters::bump(m.noiseVad, vadMax);
-        if (gateOn) {
+        if (fullBypass) return;
+        if (fNoise.on) Meters::bump(m.noiseVad, vadMax);
+        if (fGate.on) {
             // Closeness of whatever is making sound right now (only while something is audible).
             if (tiltLowSum > 0 || tiltHiSum > 0) {
                 m.gateTilt.store(10.0f * std::log10((tiltLowSum + 1e-14f) / (tiltHiSum + 1e-14f)),
@@ -449,37 +566,38 @@ public:
             Meters::bump(m.gateReduction, gateRed);
             Meters::bump(m.gateOpen, anyOpen ? 1.0f : 0.0f);
         }
-        if (compOn) {
+        if (fComp.on) {
             Meters::bump(m.compLevel, compLvlDb);
             Meters::bump(m.compReduction, compRed);
         }
-        if (deessOn) Meters::bump(m.deessReduction, deRedMax);
-        if (limiterOn) Meters::bump(m.limReduction, limRed);
-        m.autoLevelGain.store(alOn ? al.gainDb : 0.0f, std::memory_order_relaxed);
+        if (fDeess.on) Meters::bump(m.deessReduction, deRedMax);
+        if (fLim.on) Meters::bump(m.limReduction, limRed);
+        m.autoLevelGain.store(fAl.on ? al.gainDb : 0.0f, std::memory_order_relaxed);
     }
 
-private:
     void update(const Params &p) {
+        const bool jump = !configured; // the first configuration applies at once; later changes glide
+        configured = true;
         channel = int(p.get(InputChannel) + 0.5f);
-        inGain = dbToLin(p.get(InputGain));
-        bypass = p.get(Bypass) > 0.5f;
+        inGainS.configure(fs); inGainS.set(dbToLin(p.get(InputGain)), jump);
+        fBypass.set(p.get(Bypass) > 0.5f, jump, fs);
         muted = p.get(Mute) > 0.5f;
         muteStep = 1.0f / (0.010f * fs);
 
         auto active = [&](int added, int on) { return p.get(added) > 0.5f && p.get(on) > 0.5f; };
-        noiseOn = active(NoiseAdded, NoiseOn);
-        noiseMix = p.get(NoiseAmount) / 100.0f;
+        fNoise.set(active(NoiseAdded, NoiseOn), jump, fs);
+        noiseMixS.configure(fs); noiseMixS.set(p.get(NoiseAmount) / 100.0f, jump);
 
-        lowCutOn = active(LowCutAdded, LowCutOn);
+        fLowCut.set(active(LowCutAdded, LowCutOn), jump, fs);
         lowCutSteep = p.get(LowCutSteep) > 0.5f;
         if (lowCutSteep) { // 4th-order Butterworth = two stages
-            lowCut[0].set(Biquad::HP, fs, p.get(LowCutFreq), 0.5412);
-            lowCut[1].set(Biquad::HP, fs, p.get(LowCutFreq), 1.3066);
+            lowCut[0].set(Biquad::HP, fs, p.get(LowCutFreq), 0.5412, 0, jump);
+            lowCut[1].set(Biquad::HP, fs, p.get(LowCutFreq), 1.3066, 0, jump);
         } else {
-            lowCut[0].set(Biquad::HP, fs, p.get(LowCutFreq), 0.7071);
+            lowCut[0].set(Biquad::HP, fs, p.get(LowCutFreq), 0.7071, 0, jump);
         }
 
-        gateOn = active(GateAdded, GateOn);
+        fGate.set(active(GateAdded, GateOn), jump, fs);
         expander = p.get(GateMode) > 0.5f;
         det.configure(fs, p.get(GateFocus) > 0.5f, p.get(GateScLow), p.get(GateScHigh));
         tilt.configure(fs);
@@ -496,15 +614,15 @@ private:
         gAtk = onePole(p.get(GateAttack) / 2.2f, fs);
         gRel = onePole(p.get(GateRelease) / 2.2f, fs);
 
-        compOn = active(CompAdded, CompOn);
+        fComp.set(active(CompAdded, CompOn), jump, fs);
         cThr = p.get(CompThreshold);
         cRatio = std::max(1.0f, p.get(CompRatio));
         cKnee = p.get(CompKnee);
-        cMakeup = p.get(CompMakeup);
+        cMakeupS.configure(fs); cMakeupS.set(p.get(CompMakeup), jump);
         cAtk = onePole(p.get(CompAttack), fs);
         cRel = onePole(p.get(CompRelease), fs);
 
-        deessOn = p.get(DeessAdded) > 0.5f && p.get(DeessOn) > 0.5f;
+        fDeess.set(p.get(DeessAdded) > 0.5f && p.get(DeessOn) > 0.5f, jump, fs);
         deFreq = p.get(DeessFreq);
         deHp.set(Biquad::HP, fs, deFreq, 0.7071);
         deShelf.set(Biquad::HighShelf, fs, deFreq * 0.7f, 0.7071, -deRed);
@@ -515,21 +633,20 @@ private:
         deRel = onePole(40.0f, fs);
         deRelG = onePole(60.0f, fs);
 
-        eqOn = p.get(EqAdded) > 0.5f && p.get(EqOn) > 0.5f;
+        fEq.set(p.get(EqAdded) > 0.5f && p.get(EqOn) > 0.5f, jump, fs);
         for (int b = 0; b < 5; ++b) {
             const float fr = p.get(Eq1Freq + 3 * b), g = p.get(Eq1Gain + 3 * b), q = p.get(Eq1Q + 3 * b);
             const Biquad::Type t = b == 0 ? Biquad::LowShelf : b == 4 ? Biquad::HighShelf : Biquad::Peak;
-            eq[b].set(t, fs, fr, q, g);
-            eqActive[b] = std::fabs(g) > 0.05f;
+            eq[b].set(t, fs, fr, q, g, jump);
         }
 
-        toneOn = active(ToneAdded, ToneOn);
+        fTone.set(active(ToneAdded, ToneOn), jump, fs);
         pluginsOn = active(PluginsAdded, PluginsOn);
 
-        alOn = active(AutoLevelAdded, AutoLevelOn);
+        fAl.set(active(AutoLevelAdded, AutoLevelOn), jump, fs);
         al.configure(fs, p.get(AutoLevelTarget), p.get(AutoLevelMaxGain), int(p.get(AutoLevelSpeed) + 0.5f));
 
-        vcOn = active(VcAdded, VcOn);
+        fVc.set(active(VcAdded, VcOn), jump, fs);
         vc.configure(fs, p.get(VcPitch), p.get(VcCharacter), p.get(VcRobot), p.get(VcRobotFreq), p.get(VcRadio),
                      p.get(VcDrive), p.get(VcWobble), p.get(VcWobbleRate), p.get(VcMix));
         vcLo.set(Biquad::LowShelf, fs, 700, 0.7071, -p.get(VcCharacter) * 0.5f);
@@ -537,28 +654,24 @@ private:
         vcBpHp.set(Biquad::HP, fs, 450, 0.9);
         vcBpLp.set(Biquad::LP, fs, 2800, 0.9);
 
-        warmOn = active(WarmthAdded, WarmthOn);
+        fWarm.set(active(WarmthAdded, WarmthOn), jump, fs);
         warm.configure(fs, p.get(WarmthAmount));
-        exOn = active(ExciterAdded, ExciterOn);
-        exAmt = p.get(ExciterAmount) / 100.0f;
-        exHp.set(Biquad::HP, fs, p.get(ExciterFreq), 0.7071);
-        exHp2.set(Biquad::HP, fs, p.get(ExciterFreq), 0.7071);
-        dblOn = active(DoublerAdded, DoublerOn);
+        fEx.set(active(ExciterAdded, ExciterOn), jump, fs);
+        exAmtS.configure(fs); exAmtS.set(p.get(ExciterAmount) / 100.0f, jump);
+        exHp.set(Biquad::HP, fs, p.get(ExciterFreq), 0.7071, 0, jump);
+        exHp2.set(Biquad::HP, fs, p.get(ExciterFreq), 0.7071, 0, jump);
+        fDbl.set(active(DoublerAdded, DoublerOn), jump, fs);
         dbl.configure(fs, p.get(DoublerWidth), p.get(DoublerMix));
-        echoOn = active(EchoAdded, EchoOn);
+        fEcho.set(active(EchoAdded, EchoOn), jump, fs);
         echo.configure(fs, p.get(EchoTime), p.get(EchoFeedback), p.get(EchoMix), p.get(EchoTone));
-        revOn = active(ReverbAdded, ReverbOn);
+        fRev.set(active(ReverbAdded, ReverbOn), jump, fs);
         rev.configure(p.get(ReverbSize), p.get(ReverbDamp), p.get(ReverbMix));
-        const float tb = p.get(ToneBass), tp = p.get(TonePresence), ta = p.get(ToneAir);
-        tone[0].set(Biquad::LowShelf, fs, 120, 0.7071, tb);
-        tone[1].set(Biquad::Peak, fs, 4500, 0.9, tp);
-        tone[2].set(Biquad::HighShelf, fs, 10000, 0.7071, ta);
-        toneActive[0] = std::fabs(tb) > 0.05f;
-        toneActive[1] = std::fabs(tp) > 0.05f;
-        toneActive[2] = std::fabs(ta) > 0.05f;
+        tone[0].set(Biquad::LowShelf, fs, 120, 0.7071, p.get(ToneBass), jump);
+        tone[1].set(Biquad::Peak, fs, 4500, 0.9, p.get(TonePresence), jump);
+        tone[2].set(Biquad::HighShelf, fs, 10000, 0.7071, p.get(ToneAir), jump);
 
-        outGain = dbToLin(p.get(OutputGain));
-        limiterOn = p.get(LimiterOn) > 0.5f;
+        outGainS.configure(fs); outGainS.set(dbToLin(p.get(OutputGain)), jump);
+        fLim.set(p.get(LimiterOn) > 0.5f, jump, fs);
         limCeil = dbToLin(p.get(LimiterCeiling));
         limLookahead = std::clamp(int(0.0015f * fs), 1, kLimSize - 1);
         lAtk = onePole(0.3f, fs);
@@ -567,23 +680,27 @@ private:
 
     float fs;
     uint32_t seenVersion = 0;
+    bool configured = false;
+
+    static constexpr int kMaxBlock = 1024;
+    std::array<float, kMaxBlock> raw{}; // input after channel + gain (for the bypass crossfade)
+    StageFade fBypass, fNoise, fLowCut, fGate, fAl, fComp, fDeess, fVc, fEq, fTone, fWarm, fEx, fDbl, fEcho, fRev, fLim;
 
     int channel = 0;
-    float inGain = 1;
-    bool bypass = false;
+    Smoothed inGainS;
 
     // AI noise removal
     static constexpr int kNoiseFrame = 480;
     DenoiseState *denoise = nullptr;
-    bool noiseOn = false;
-    float noiseMix = 1, lastVad = 0;
+    Smoothed noiseMixS;
+    float lastVad = 0;
     std::array<float, kNoiseFrame> nIn{}, nOut{}, nDry{};
     int nPos = 0;
 
-    bool lowCutOn = true, lowCutSteep = true;
-    Biquad lowCut[2];
+    bool lowCutSteep = true;
+    SmoothBiquad lowCut[2];
 
-    bool gateOn = true, expander = false;
+    bool expander = false;
     GateDetector det;
     TiltDetector tilt;
     bool closeCheck = false, tiltBrighter = false;
@@ -596,40 +713,32 @@ private:
     std::array<float, kGateSize> gDelay{};
     int gPos = 0, gLookahead = 0;
 
-    bool compOn = true;
-    float cThr = -24, cRatio = 3, cKnee = 6, cMakeup = 0, cAtk = 0, cRel = 0;
+    float cThr = -24, cRatio = 3, cKnee = 6, cAtk = 0, cRel = 0;
+    Smoothed cMakeupS;
     float compGrDb = 0;
 
-    bool deessOn = false;
     Biquad deHp, deShelf;
     float deFreq = 6000, deShelfDb = 0;
     uint32_t deCount = 0;
     float deThr = -30, deMax = 8, deAtk = 0, deRel = 0, deRelG = 0, deEnv = 0, deRed = 0;
 
-    bool eqOn = false;
-    Biquad eq[5];
-    bool eqActive[5] = {};
-
-    bool toneOn = true;
-    Biquad tone[3];
-    bool toneActive[3] = {false, false, false};
+    SmoothBiquad eq[5];
+    SmoothBiquad tone[3];
 
     bool pluginsOn = false;
     bool muted = false;
     float muteGain = 1.0f, muteStep = 1.0f / 480.0f;
-    bool alOn = false, vcOn = false, warmOn = false, exOn = false, dblOn = false, echoOn = false, revOn = false;
     AutoLevel al;
     VoiceChanger vc;
     Biquad vcLo, vcHi, vcBpHp, vcBpLp;
     Warmth warm;
-    Biquad exHp, exHp2;
-    float exAmt = 0.3f;
+    SmoothBiquad exHp, exHp2;
+    Smoothed exAmtS;
     Doubler dbl;
     Echo echo;
     Reverb rev;
 
-    float outGain = 1;
-    bool limiterOn = true;
+    Smoothed outGainS;
     float limCeil = 0.89f, limGain = 1, lAtk = 0, lRel = 0;
     static constexpr int kLimSize = 256, kLimMask = kLimSize - 1;
     std::array<float, kLimSize> limDelay{}, limAbs{};
