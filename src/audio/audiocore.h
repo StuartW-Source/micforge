@@ -77,6 +77,7 @@ public:
     Recorder recorder{45}; // tap used by the voice-separation setup
     PluginRack rack;       // third-party VST3 / LV2 plugins
     EngineStats stats;
+    ScopeTap scope;        // what the Voice Gate hears, for the spectrum view
     MicTest test;
 
     // ---- real-time (audio thread)

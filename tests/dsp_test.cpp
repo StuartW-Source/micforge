@@ -3,6 +3,7 @@
 #include "dsp.h"
 #include "levels.h"
 #include "separation.h"
+#include "spectrum.h"
 
 #include <cstdio>
 #include <vector>
@@ -653,6 +654,15 @@ int main() {
         check(a < b - 8, name, a);
         auto vOff = run(off, bassy), vOn = run(on, bassy);
         check(std::fabs(rmsDb(vOn, 48000, L) - rmsDb(vOff, 48000, L)) < 0.3, "plosive guard: bass-heavy close voice untouched (dB)", rmsDb(vOn, 48000, L) - rmsDb(vOff, 48000, L));
+    }
+    { // Spectrum view: a -12 dBFS 1 kHz tone shows at 1 kHz and -12 dB; a quiet band stays quiet.
+        std::vector<float> x(4096);
+        for (size_t i = 0; i < x.size(); ++i) x[i] = 0.25f * float(std::sin(2 * M_PI * 1000 * double(i) / 48000));
+        auto bands = logBandsDb(powerSpectrum(x.data(), x.size()), 48000, 50, 8000, 120);
+        int peak = int(std::max_element(bands.begin(), bands.end()) - bands.begin());
+        const double peakHz = 50 * std::pow(160.0, (peak + 0.5) / 120);
+        check(std::fabs(peakHz / 1000 - 1) < 0.05 && std::fabs(bands[size_t(peak)] + 12.04) < 1.0, "spectrum: 1 kHz at -12 dB lands in the right band", bands[size_t(peak)]);
+        check(bands[5] < -80, "spectrum: no energy reported far from the tone (60 Hz band)", bands[5]);
     }
     { // A sustained vowel ("aaah", 2.5 s, perfectly steady) is not mistaken for background noise.
         const int L = 48000 * 4;

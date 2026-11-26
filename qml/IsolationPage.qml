@@ -56,6 +56,47 @@ ColumnLayout {
         }
     }
 
+    // What the gate hears, by pitch.
+    Card {
+        id: specCard
+        visible: root.gateIn
+        Layout.fillWidth: true
+        pad: Theme.sp3 + 2
+        property bool open: true
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Theme.sp3
+            Text { text: "What the gate hears"; color: Theme.text; font.pixelSize: Theme.fsBodyLg; font.weight: Font.Bold }
+            Repeater {
+                model: [["live sound", Theme.input, false], ["your voice (Setup)", Theme.gate, true], ["other voices", Theme.tone, true], ["room", Theme.textFaint, true]]
+                Row {
+                    visible: specCard.open && (index === 0 || controller.spectrum.recorded[["", "you", "others", "room"][index]] !== undefined)
+                    spacing: 5
+                    Rectangle { width: 14; height: 2; y: 7; color: modelData[1]; opacity: modelData[2] ? 0.8 : 1 }
+                    Text { text: modelData[0]; color: Theme.textDim; font.pixelSize: Theme.fsSmall }
+                }
+            }
+            Row {
+                visible: specCard.open && root.p.gateFocus > 0.5
+                spacing: 5
+                Rectangle { width: 14; height: 10; y: 2; color: Theme.alpha(Theme.gate, 0.25) }
+                Text { text: "listening band"; color: Theme.textDim; font.pixelSize: Theme.fsSmall }
+            }
+            Item { Layout.fillWidth: true }
+            HelpButton { text: "Left = low pitch, right = high pitch; higher = louder. The shaded area is the band the gate listens to: Setup picks the range where your voice (green, dashed) stands furthest above other voices (pink) and the room (grey)." }
+            PillButton { text: specCard.open ? "Hide" : "Show"; implicitHeight: Theme.controlHeightSm; onClicked: specCard.open = !specCard.open }
+        }
+        SpectrumView {
+            visible: specCard.open
+            Layout.fillWidth: true
+            Layout.preferredHeight: 170
+            onVisibleChanged: controller.spectrum.active = visible && root.visible
+        }
+    }
+    onVisibleChanged: controller.spectrum.active = visible && specCard.open && root.gateIn
+    Component.onCompleted: controller.spectrum.active = visible && specCard.open && root.gateIn
+    Component.onDestruction: controller.spectrum.active = false
+
     // The gate is removable; offer to put it back.
     Card {
         visible: !root.gateIn

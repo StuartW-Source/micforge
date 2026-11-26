@@ -9,6 +9,7 @@
 #include "mictest.h"
 #include "levels.h"
 #include "calibprofiles.h"
+#include "detectorspectrum.h"
 #include "optional/rnnoise_api.h"
 
 #include <QFutureWatcher>
@@ -37,6 +38,7 @@ class Controller : public QObject {
     Q_PROPERTY(PluginManager *plugins READ plugins CONSTANT)
     Q_PROPERTY(Diagnostics *diagnostics READ diagnostics CONSTANT)
     Q_PROPERTY(MicTestSession *micTest READ micTest CONSTANT)
+    Q_PROPERTY(DetectorSpectrum *spectrum READ spectrum CONSTANT)
     // Per-microphone Setup: a message after switching mics, and the microphones that have a saved Setup.
     Q_PROPERTY(QString profileNotice READ profileNotice NOTIFY profileNoticeChanged)
     Q_PROPERTY(QVariantList micProfiles READ micProfiles NOTIFY profileNoticeChanged)
@@ -107,6 +109,7 @@ public:
     PluginManager *plugins() { return m_plugins; }
     Diagnostics *diagnostics() { return m_diagnostics; }
     MicTestSession *micTest() { return m_micTest; }
+    DetectorSpectrum *spectrum() { return m_spectrum; }
     QString profileNotice() const { return m_profileNotice; }
     QVariantList micProfiles() const;
     Q_INVOKABLE void dismissProfileNotice();
@@ -215,6 +218,7 @@ private:
     PluginManager *m_plugins = nullptr;
     Diagnostics *m_diagnostics = nullptr;
     MicTestSession *m_micTest = nullptr;
+    DetectorSpectrum *m_spectrum = nullptr;
     bool m_testPlayback = false;          // mic-test playback needs the monitor output
     void updateMonitorStream();
     QSettings m_settingsStore;

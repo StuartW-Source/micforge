@@ -384,6 +384,7 @@ struct GateDetector {
 
 } // namespace mf
 #include "effects.h"
+#include "spectrum.h"
 namespace mf {
 
 // "Closeness" detector: compares bass (100-300 Hz) with treble (1-4 kHz) energy.
@@ -431,6 +432,7 @@ public:
     VoiceChain &operator=(const VoiceChain &) = delete;
 
     Recorder *recorder = nullptr; // optional tap at the gate input
+    ScopeTap *scope = nullptr;    // optional display tap at the gate input (spectrum view)
     // Optional block-processing hook for third-party plugins (kept as a plain callback so this
     // header stays free of plugin/Qt dependencies).
     void (*blockHook)(void *ctx, float *io, int n) = nullptr;
@@ -611,6 +613,7 @@ private:
             // 4. Gate / expander. The detector listens to a filtered band; the audio
             //    itself is delayed slightly (look-ahead) so word starts aren't clipped.
             if (recorder) recorder->push(x);
+            if (scope && scope->on.load(std::memory_order_relaxed)) scope->push(x);
             if (fGate.running()) {
                 const float env = det.process(x);
                 gateLvl = std::max(gateLvl, env);

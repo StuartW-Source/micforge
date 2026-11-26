@@ -24,6 +24,7 @@ size_t Ring::read(float *dst, size_t n) {
 
 AudioCore::AudioCore() : scratch(16384), vmicRing(16384), monitorRing(16384) {
     chain.recorder = &recorder;
+    chain.scope = &scope;
     chain.blockHook = &PluginRack::hook;
     chain.blockCtx = &rack;
 }
