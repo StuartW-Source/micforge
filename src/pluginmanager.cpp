@@ -1,6 +1,10 @@
 #include "pluginmanager.h"
 
 #include <QCoreApplication>
+#include <QFile>
+#include <QStandardPaths>
+#include <QDir>
+#include <QCryptographicHash>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -20,6 +24,11 @@ PluginManager::PluginManager(PluginRack *rack, double sampleRate, QObject *paren
     m_saveTimer.setSingleShot(true);
     m_saveTimer.setInterval(800);
     connect(&m_saveTimer, &QTimer::timeout, this, &PluginManager::save);
+    m_rack->sampleRate = float(sampleRate);
+    m_blocked = QSettings().value("plugins/blocked").toStringList();
+    m_cpuTimer.setInterval(1000);
+    connect(&m_cpuTimer, &QTimer::timeout, this, [this] { if (!m_entries.empty()) emit cpuChanged(); });
+    m_cpuTimer.start();
 }
 
 PluginManager::~PluginManager() {
@@ -57,6 +66,8 @@ void PluginManager::rescan(bool force) {
         m_found = scanLv2();
         const auto b = vst3Bundles();
         m_pendingBundles.assign(b.begin(), b.end());
+        m_scanTotal = int(m_pendingBundles.size());
+        m_scanDone = 0;
         scanVst3Next();
     });
 }
@@ -70,7 +81,8 @@ void PluginManager::scanVst3Next() {
     }
     const QString bundle = m_pendingBundles.back();
     m_pendingBundles.pop_back();
-    m_scanStatus = tr("Checking %1…").arg(QFileInfo(bundle).fileName());
+    ++m_scanDone;
+    m_scanStatus = tr("Checking %1 (%2 of %3)…").arg(QFileInfo(bundle).fileName()).arg(m_scanDone).arg(m_scanTotal);
     emit scanningChanged();
 
     QSettings s;
@@ -82,7 +94,10 @@ void PluginManager::scanVst3Next() {
         return;
     }
     auto *proc = new QProcess(this);
+    m_scanProc = proc;
     connect(proc, &QProcess::finished, this, [this, proc, key, mtime](int code, QProcess::ExitStatus st) {
+        m_scanProc = nullptr;
+        if (!m_scanning) { proc->deleteLater(); return; } // cancelled
         QVariantList list;
         if (st == QProcess::NormalExit && code == 0) {
             for (const auto &v : QJsonDocument::fromJson(proc->readAllStandardOutput()).array()) {
@@ -100,12 +115,26 @@ void PluginManager::scanVst3Next() {
     QTimer::singleShot(15000, proc, [proc] { if (proc->state() != QProcess::NotRunning) proc->kill(); });
 }
 
+void PluginManager::cancelScan() {
+    if (!m_scanning) return;
+    m_pendingBundles.clear();
+    if (m_scanProc) m_scanProc->kill(); // its result is ignored; the bundle is checked again next time
+    finishScan();
+    m_scanStatus = tr("Search stopped. %1").arg(m_scanStatus);
+    emit scanningChanged();
+}
+
 void PluginManager::finishScan() {
+    m_scanTotal = m_scanDone = 0;
     std::sort(m_found.begin(), m_found.end(), [](const PluginInfo &a, const PluginInfo &b) {
         return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
     });
     m_available.clear();
-    for (const auto &i : m_found) m_available << i.toMap();
+    for (const auto &i : m_found) {
+        QVariantMap m = i.toMap();
+        m["blocked"] = m_blocked.contains(i.format + ":" + i.id);
+        m_available << m;
+    }
     int lv2 = 0, vst3 = 0;
     for (const auto &i : m_found) (i.format == "LV2" ? lv2 : vst3)++;
     m_scanning = false;
@@ -163,7 +192,7 @@ QVariantList PluginManager::chain() const {
 }
 
 bool PluginManager::add(const QString &format, const QString &id) {
-    if (int(m_entries.size()) >= PluginRack::kSlots) return false;
+    if (int(m_entries.size()) >= PluginRack::kSlots || isBlocked(format, id)) return false;
     auto it = std::find_if(m_found.begin(), m_found.end(), [&](const PluginInfo &i) { return i.format == format && i.id == id; });
     if (it == m_found.end()) return false;
     Entry e;
@@ -202,7 +231,7 @@ void PluginManager::setBypass(int slot, bool bypass) {
 
 void PluginManager::retry(int slot) {
     Entry *e = entry(slot);
-    if (!e || e->inst) return;
+    if (!e || e->inst || isBlocked(e->info.format, e->info.id)) return;
     instantiate(*e);
     publish();
 }
@@ -257,6 +286,80 @@ void PluginManager::resetValue(int slot, int index) {
 QString PluginManager::text(int slot, int index, double v) const {
     const Entry *e = entry(slot);
     return e && e->inst && index >= 0 && index < e->inst->paramCount() ? e->inst->valueText(index, float(v)) : QString();
+}
+
+// ---------------------------------------------------------------- block list, CPU
+
+void PluginManager::setBlocked(const QString &format, const QString &id, bool block) {
+    const QString key = format + ":" + id;
+    if (block == m_blocked.contains(key)) return;
+    if (block) m_blocked << key;
+    else m_blocked.removeAll(key);
+    if (!m_readOnly) QSettings().setValue("plugins/blocked", m_blocked);
+    for (QVariant &v : m_available) {
+        QVariantMap m = v.toMap();
+        if (m.value("format").toString() == format && m.value("id").toString() == id) { m["blocked"] = block; v = m; }
+    }
+    emit availableChanged();
+}
+
+QVariantList PluginManager::cpu() const {
+    QVariantList out;
+    for (size_t i = 0; i < m_entries.size() && i < size_t(PluginRack::kSlots); ++i)
+        out << double(m_rack->load[i].load(std::memory_order_relaxed) * 100.0f);
+    return out;
+}
+
+// ---------------------------------------------------------------- plugin presets
+
+QString PluginManager::presetFolder(const PluginInfo &info) const {
+    const QByteArray h = QCryptographicHash::hash((info.format + ":" + info.id).toUtf8(), QCryptographicHash::Sha1).toHex().left(12);
+    return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) + "/plugin-presets/" + info.format + "-" + QString::fromLatin1(h);
+}
+
+QStringList PluginManager::pluginPresets(int slot) const {
+    const Entry *e = entry(slot);
+    if (!e) return {};
+    QStringList names;
+    for (const QString &f : QDir(presetFolder(e->info)).entryList({"*.json"}, QDir::Files, QDir::Name)) names << f.chopped(5);
+    return names;
+}
+
+bool PluginManager::savePluginPreset(int slot, const QString &rawName) {
+    const Entry *e = entry(slot);
+    const QString name = rawName.trimmed().replace('/', '-');
+    if (!e || !e->inst || name.isEmpty() || m_readOnly) return false;
+    QVariantMap vals;
+    for (int i = 0; i < e->inst->paramCount(); ++i) vals[e->inst->param(i).id] = e->inst->value(i);
+    QJsonObject o{{"format", "micforge-plugin-preset"}, {"version", 1}, {"plugin", e->info.name},
+                  {"pluginFormat", e->info.format}, {"pluginId", e->info.id}, {"params", QJsonObject::fromVariantMap(vals)}};
+    QDir().mkpath(presetFolder(e->info));
+    QFile f(presetFolder(e->info) + "/" + name + ".json");
+    if (!f.open(QIODevice::WriteOnly)) return false;
+    f.write(QJsonDocument(o).toJson());
+    emit chainChanged();
+    return true;
+}
+
+bool PluginManager::loadPluginPreset(int slot, const QString &name) {
+    Entry *e = entry(slot);
+    if (!e || !e->inst) return false;
+    QFile f(presetFolder(e->info) + "/" + name + ".json");
+    if (!f.open(QIODevice::ReadOnly)) return false;
+    const QVariantMap vals = QJsonDocument::fromJson(f.readAll()).object().value("params").toObject().toVariantMap();
+    for (int i = 0; i < e->inst->paramCount(); ++i) {
+        const auto it = vals.find(e->inst->param(i).id);
+        if (it != vals.end()) setValue(slot, i, it.value().toDouble());
+    }
+    emit valuesChanged();
+    return true;
+}
+
+void PluginManager::deletePluginPreset(int slot, const QString &name) {
+    const Entry *e = entry(slot);
+    if (!e || m_readOnly) return;
+    QFile::remove(presetFolder(e->info) + "/" + name + ".json");
+    emit chainChanged();
 }
 
 // ---------------------------------------------------------------- presets
@@ -338,7 +441,9 @@ void PluginManager::restore() {
         e.info = PluginInfo::fromMap(o.toVariantMap());
         e.bypass = o["bypass"].toBool();
         e.saved = o["params"].toObject().toVariantMap();
-        if (!crashed.isEmpty() && crashed == e.info.format + ":" + e.info.id)
+        if (isBlocked(e.info.format, e.info.id))
+            e.error = tr("This plugin is on your block list, so it isn't loaded.");
+        else if (!crashed.isEmpty() && crashed == e.info.format + ":" + e.info.id)
             e.error = tr("MicForge closed unexpectedly while loading this plugin last time, so it's been switched "
                          "off. Click Retry to try again.");
         else

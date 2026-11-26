@@ -128,7 +128,7 @@ if(MICFORGE_BUILD_TESTS)
     target_link_libraries(dsp_test PRIVATE ${CMAKE_DL_LIBS})
     add_test(NAME dsp COMMAND dsp_test)
 
-    add_executable(audiocore_test tests/audiocore_test.cpp src/audio/audiocore.cpp src/optional/rnnoise_api.cpp)
+    add_executable(audiocore_test tests/audiocore_test.cpp src/audio/audiocore.cpp src/optional/rnnoise_api.cpp src/plugins/plugins.cpp)
     target_include_directories(audiocore_test PRIVATE src)
     target_link_libraries(audiocore_test PRIVATE Qt6::Core Threads::Threads ${CMAKE_DL_LIBS})
     add_test(NAME audiocore COMMAND audiocore_test)

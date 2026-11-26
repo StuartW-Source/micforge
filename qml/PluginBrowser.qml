@@ -39,8 +39,16 @@ Popup {
                 }
             }
             Item { Layout.fillWidth: true }
+            PillButton { visible: root.pm.scanning; text: "Stop"; onClicked: root.pm.cancelScan() }
             PillButton { text: "Rescan"; enabled: !root.pm.scanning; onClicked: root.pm.rescan(true) }
             PillButton { text: "Close"; onClicked: root.close() }
+        }
+        Rectangle {
+            visible: root.pm.scanning && root.pm.scanProgress > 0
+            Layout.fillWidth: true
+            implicitHeight: 4; radius: 2
+            color: Theme.track
+            Rectangle { width: parent.width * root.pm.scanProgress; height: parent.height; radius: 2; color: Theme.plugins }
         }
         RowLayout {
             Layout.fillWidth: true
@@ -95,11 +103,19 @@ Popup {
                         spacing: 1
                         Text { text: modelData.name; color: Theme.text; font.pixelSize: 14; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
                         Text {
-                            text: [modelData.vendor, modelData.category].filter(function(s) { return s && s.length > 0 }).join(" · ")
+                            text: (modelData.blocked ? "Blocked · " : "") + [modelData.vendor, modelData.category].filter(function(s) { return s && s.length > 0 }).join(" · ")
                             color: Theme.textFaint; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true
                         }
                     }
                     PillButton {
+                        text: modelData.blocked ? "Unblock" : "Block"
+                        implicitHeight: 30
+                        onClicked: root.pm.setBlocked(modelData.format, modelData.id, !modelData.blocked)
+                        ToolTipLite { visible: bh.hovered; text: modelData.blocked ? "Allow this plugin again." : "Hide this plugin from MicForge (e.g. if it crashes or misbehaves)." }
+                        HoverHandler { id: bh }
+                    }
+                    PillButton {
+                        visible: !modelData.blocked
                         text: "Add"
                         primary: true
                         accent: Theme.plugins

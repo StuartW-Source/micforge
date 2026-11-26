@@ -22,6 +22,16 @@ static std::vector<float> stereoTone(float amp, int frames, float hz = 440) {
     return v;
 }
 
+// A plugin that spends a known share of each block (busy-waits), to check the CPU readout.
+struct BusyPlugin : PluginInstance {
+    double share;
+    explicit BusyPlugin(double s) : share(s) {}
+    void process(float *, int n) override {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(share * n / 48000.0);
+        while (std::chrono::steady_clock::now() < until) {}
+    }
+};
+
 int main() {
     { // Statistics: blocks, block size, processing time.
         AudioCore c;
@@ -111,6 +121,18 @@ int main() {
         c.readVirtualMic(out.data(), 256);
         c.readVirtualMic(out.data(), 256);
         check(c.stats.vmicUnderruns == 1, "underrun: counted when an app reads faster than audio arrives", double(c.stats.vmicUnderruns));
+    }
+    { // Per-plugin CPU: a plugin using ~20% of each block reads ~20%; an idle one ~0%; bypassed isn't timed.
+        PluginRack rack;
+        BusyPlugin busy(0.20), idle(0.0), skipped(0.5);
+        skipped.bypass = true;
+        rack.slot[0] = &busy; rack.slot[1] = &idle; rack.slot[2] = &skipped;
+        std::vector<float> buf(256);
+        for (int k = 0; k < 400; ++k) rack.process(buf.data(), 256);
+        const double b = rack.load[0] * 100, i = rack.load[1] * 100, sk = rack.load[2] * 100;
+        check(b > 17 && b < 30, "plugin CPU: busy plugin reads ~20%", b);
+        check(i < 2, "plugin CPU: idle plugin reads ~0%", i);
+        check(sk == 0, "plugin CPU: bypassed plugin isn't counted", sk);
     }
     std::printf("\naudiocore tests: %s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;

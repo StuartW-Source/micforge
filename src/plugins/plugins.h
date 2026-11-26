@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <vector>
 
@@ -109,15 +110,25 @@ public:
     std::atomic<bool> busy{false}; // true while the audio thread is inside process()
 
     static constexpr int kMaxBlock = 2048; // plugins are created with this block size
+    // Share of each block's time each slot used (moving average, 0..1+); read by the UI.
+    std::array<std::atomic<float>, kSlots> load{};
+    float sampleRate = 48000;
 
     // Audio thread.
     void process(float *io, int n) {
         busy.store(true, std::memory_order_release);
+        using clock = std::chrono::steady_clock;
         for (int off = 0; off < n; off += kMaxBlock) {
             const int len = std::min(kMaxBlock, n - off);
-            for (auto &s : slot) {
-                PluginInstance *p = s.load(std::memory_order_acquire);
-                if (p && !p->bypass.load(std::memory_order_relaxed)) p->process(io + off, len);
+            const float blockSec = float(len) / sampleRate;
+            for (size_t i = 0; i < slot.size(); ++i) {
+                PluginInstance *p = slot[i].load(std::memory_order_acquire);
+                if (!p || p->bypass.load(std::memory_order_relaxed)) continue;
+                const auto t0 = clock::now();
+                p->process(io + off, len);
+                const float used = std::chrono::duration<float>(clock::now() - t0).count() / blockSec;
+                const float prev = load[i].load(std::memory_order_relaxed);
+                load[i].store(prev + 0.05f * (used - prev), std::memory_order_relaxed);
             }
         }
         busy.store(false, std::memory_order_release);

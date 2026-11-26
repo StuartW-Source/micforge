@@ -91,7 +91,11 @@ StagePanel {
                             spacing: 0
                             Text { text: modelData.name; color: modelData.bypass ? Theme.textFaint : Theme.text; font.pixelSize: 14; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
                             Text {
-                                text: (modelData.vendor || "") + (modelData.latency > 0 ? "  ·  adds " + (modelData.latency / 48).toFixed(1) + " ms delay" : "")
+                                readonly property real load: root.pm.cpu[index] || 0
+                                text: [modelData.vendor || "",
+                                       modelData.latency > 0 ? "adds " + (modelData.latency / 48).toFixed(1) + " ms delay" : "",
+                                       modelData.loaded && !modelData.bypass ? "CPU " + (load < 0.1 ? "<0.1" : load.toFixed(1)) + "%" : ""]
+                                      .filter(function(s) { return s !== "" }).join("  ·  ")
                                 color: Theme.textFaint; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true
                             }
                         }
@@ -115,7 +119,13 @@ StagePanel {
                         visible: modelData.error !== ""
                         Layout.fillWidth: true
                         Text { Layout.fillWidth: true; text: modelData.error; color: Theme.danger; font.pixelSize: 12; wrapMode: Text.WordWrap }
-                        PillButton { visible: !modelData.loaded; text: "Retry"; implicitHeight: 26; onClicked: root.pm.retry(index) }
+                        PillButton { visible: !modelData.loaded && !root.pm.isBlocked(modelData.format, modelData.id); text: "Retry"; implicitHeight: 26; onClicked: root.pm.retry(index) }
+                        PillButton {
+                            visible: !modelData.loaded
+                            text: root.pm.isBlocked(modelData.format, modelData.id) ? "Unblock" : "Block"
+                            implicitHeight: 26
+                            onClicked: { root.pm.setBlocked(modelData.format, modelData.id, !root.pm.isBlocked(modelData.format, modelData.id)); root.pm.retry(index) }
+                        }
                     }
 
                     // Parameters (generated): only built when expanded.
@@ -126,7 +136,31 @@ StagePanel {
                         sourceComponent: ColumnLayout {
                             spacing: 10
                             readonly property var all: root.pm.params(card.slot)
-                            TextField {
+                            // This plugin's own presets.
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                property var names: { root.pm.chain; return root.pm.pluginPresets(card.slot) }
+                                Text { text: "Plugin preset"; color: Theme.textDim; font.pixelSize: Theme.fsBody }
+                                MfComboBox {
+                                    Layout.preferredWidth: 220
+                                    model: parent.names
+                                    enabled: parent.names.length > 0
+                                    displayText: parent.names.length === 0 ? "None saved yet" : "Load…"
+                                    accent: Theme.plugins
+                                    onActivated: (i) => root.pm.loadPluginPreset(card.slot, parent.names[i])
+                                    Accessible.name: "Load a plugin preset"
+                                }
+                                MfTextField { id: ppName; Layout.preferredWidth: 180; placeholderText: "New preset name"; implicitHeight: Theme.controlHeightSm }
+                                PillButton {
+                                    text: "Save"
+                                    implicitHeight: Theme.controlHeightSm
+                                    enabled: ppName.text.trim() !== ""
+                                    onClicked: { root.pm.savePluginPreset(card.slot, ppName.text); ppName.text = "" }
+                                }
+                                Item { Layout.fillWidth: true }
+                            }
+                            MfTextField {
                                 id: filter
                                 visible: parent.all.length > 12
                                 Layout.fillWidth: true
