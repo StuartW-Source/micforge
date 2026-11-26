@@ -6,7 +6,7 @@
 #
 # Covers: single-instance hand-over, unresponsive instance detection and --replace, stale locks
 # after a crash, clean quit on SIGTERM, crash-loop -> automatic safe mode, safe mode never writing
-# settings, PipeWire unavailable at start (keeps running and retries).
+# settings, presets in the daily backup, PipeWire unavailable at start (keeps running and retries).
 set -u
 BIN=$(readlink -f "${1:-build/micforge}")
 export MICFORGE_TEST=1 QT_QPA_PLATFORM=offscreen
@@ -26,6 +26,9 @@ trap cleanup EXIT
 cleanup
 mkdir -p "$(dirname "$LOG")"; touch "$LOG"
 echo 0 > "$GUARD"
+mkdir -p "$HOME/.config/MicForge/MicForgeTest/presets"
+[ -f "$HOME/.config/MicForge/MicForgeTest/presets/startup-test.json" ] ||
+    echo '{"format":"micforge-preset","version":2,"params":{"reverbMix":10}}' > "$HOME/.config/MicForge/MicForgeTest/presets/startup-test.json"
 
 # 1. Main instance starts; a second launch hands over to it and exits 0.
 mark; "$BIN" >/dev/null 2>&1 & A=$!
@@ -55,6 +58,10 @@ wait_log "startup: ready" 15; kill -KILL $D; wait $D 2>/dev/null
 # 5. Two launches that died early -> the third starts in safe mode automatically.
 mark; "$BIN" >/dev/null 2>&1 & E=$!
 if wait_log "starting in safe mode" 15 && wait_log "ready (SAFE MODE)" 15; then ok "crash loop -> automatic safe mode"; else bad "automatic safe mode"; fi
+
+# 5b. Presets are included in the daily backup (a test preset is created at the start).
+BK="$HOME/.local/state/MicForge/MicForgeTest/backups/presets-$(date +%F)"
+if ls "$BK"/*.json >/dev/null 2>&1; then ok "presets backed up daily"; else bad "presets not in the daily backup"; fi
 
 # 6. Safe mode never writes the settings file.
 before=$(sha256sum "$CONF" 2>/dev/null | cut -c1-64)
