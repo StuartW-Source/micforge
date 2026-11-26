@@ -1,6 +1,7 @@
 #include "diagnostics.h"
 
 #include "controller.h"
+#include "privacy.h"
 
 #include <QClipboard>
 #include <QDateTime>
@@ -33,23 +34,9 @@ void Diagnostics::setActive(bool on) {
     emit activeChanged();
 }
 
-QString Diagnostics::deviceKind(const QString &n) {
-    if (n.startsWith("bluez")) return QStringLiteral("Bluetooth");
-    if (n.contains(".usb-")) return QStringLiteral("USB");
-    if (n.contains(".pci-") || n.contains("platform-")) return QStringLiteral("built-in");
-    if (n.isEmpty()) return QStringLiteral("none");
-    return QStringLiteral("other");
-}
-
-QString Diagnostics::scrub(QString t) {
-    const QString home = QDir::homePath();
-    if (home.size() > 1) t.replace(home, QStringLiteral("~"));
-    const QString user = qEnvironmentVariable("USER", qEnvironmentVariable("USERNAME"));
-    if (user.size() > 1) t.replace(QRegularExpression("\\b" + QRegularExpression::escape(user) + "\\b"), QStringLiteral("<user>"));
-    const QString host = QSysInfo::machineHostName();
-    if (host.size() > 1) t.replace(QRegularExpression("\\b" + QRegularExpression::escape(host) + "\\b"), QStringLiteral("<computer>"));
-    return t;
-}
+QString Diagnostics::deviceKind(const QString &n) { return privacy::deviceKind(n); }
+QString Diagnostics::stripPaths(QString t) { return privacy::stripPaths(std::move(t)); }
+QString Diagnostics::scrub(QString t) { return privacy::scrub(std::move(t)); }
 
 void Diagnostics::refresh() {
     EngineStats &s = m_core.stats;
@@ -115,7 +102,7 @@ void Diagnostics::refresh() {
         const QVariantMap p = v.toMap();
         plugins << QVariantMap{{"name", p.value("name")}, {"format", p.value("format")},
                                {"loaded", p.value("loaded")}, {"bypass", p.value("bypass")},
-                               {"error", scrub(p.value("error").toString())}, {"latency", p.value("latency")}};
+                               {"error", stripPaths(p.value("error").toString())}, {"latency", p.value("latency")}};
     }
     m["plugins"] = plugins;
     m["unavailable"] = m_ctl->unavailableFeatures();
@@ -195,7 +182,8 @@ QString Diagnostics::report(bool includeDeviceNames, bool includeLog) const {
     line("Device/graph rate", m.value("graphRate").toInt() ? QString::number(m.value("graphRate").toInt()) + " Hz" : QStringLiteral("unknown"));
     line("Block size", QString::number(m.value("quantum").toInt()) + " frames (" + QString::number(m.value("quantumMs").toDouble(), 'f', 1) + " ms)");
     line("Input latency", QString::number(m.value("inputLatencyMs").toDouble(), 'f', 1) + " ms");
-    line("Output latency", QString::number(m.value("outputLatencyMs").toDouble(), 'f', 1) + " ms");
+    line("Output latency", m.value("virtualMicInUse").toBool() ? QString::number(m.value("outputLatencyMs").toDouble(), 'f', 1) + " ms"
+                                                              : QStringLiteral("n/a (no app connected)"));
     line("Internal buffer", QString::number(m.value("bufferMs").toDouble(), 'f', 1) + " ms");
     line("Processing time", QString::number(m.value("procUsAvg").toDouble(), 'f', 0) + " µs average, "
                                 + QString::number(m.value("procUsSessionMax").toDouble(), 'f', 0) + " µs worst");

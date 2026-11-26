@@ -131,7 +131,9 @@ ApplicationWindow {
         { id: "isolation", title: "Voice Isolation", glyph: "◐", file: "IsolationPage.qml" },
         { id: "effects",   title: "Effects",         glyph: "⧉", file: "EffectsPage.qml" },
         { id: "devices",   title: "Audio Devices",   glyph: "⇌", file: "DevicesPage.qml" },
+        { id: "mictest",   title: "Mic Test",        glyph: "◎", file: "MicTestPage.qml" },
         { id: "presets",   title: "Presets",         glyph: "★", file: "PresetsPage.qml" },
+        { id: "diagnostics", title: "Diagnostics",   glyph: "✚", file: "DiagnosticsPage.qml" },
         { id: "settings",  title: "Settings",        glyph: "⚙", file: "SettingsPage.qml" }
     ]
     property string page: "overview"

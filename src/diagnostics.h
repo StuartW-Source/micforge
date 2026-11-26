@@ -38,6 +38,8 @@ public:
 
     // Remove the home folder, user name and computer name from any text.
     static QString scrub(QString text);
+    // Replace file paths by their file name ("…/ADelay.vst3").
+    static QString stripPaths(QString text);
     // "USB", "Bluetooth", "built-in", "virtual" … from a device's internal name.
     static QString deviceKind(const QString &nodeName);
 

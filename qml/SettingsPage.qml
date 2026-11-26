@@ -83,6 +83,7 @@ Flickable {
             Flow {
                 Layout.fillWidth: true
                 spacing: Theme.sp2
+                PillButton { text: "Open Diagnostics"; primary: true; implicitHeight: Theme.controlHeightSm; onClicked: app.navigate("diagnostics") }
                 PillButton { text: "Open log folder"; implicitHeight: Theme.controlHeightSm; onClicked: controller.openLogFolder() }
                 PillButton { text: "Restart audio engine"; implicitHeight: Theme.controlHeightSm; onClicked: controller.restartEngine() }
                 PillButton {

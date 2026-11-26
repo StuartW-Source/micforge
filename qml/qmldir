@@ -54,3 +54,7 @@ IsolationPage 1.0 IsolationPage.qml
 DevicesPage 1.0 DevicesPage.qml
 PresetsPage 1.0 PresetsPage.qml
 SettingsPage 1.0 SettingsPage.qml
+WaveView 1.0 WaveView.qml
+MetricBar 1.0 MetricBar.qml
+DiagnosticsPage 1.0 DiagnosticsPage.qml
+MicTestPage 1.0 MicTestPage.qml

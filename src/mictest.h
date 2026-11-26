@@ -48,6 +48,8 @@ public:
     Q_INVOKABLE void discard();
     // Writes micforge-test-<time>-raw.wav and -processed.wav into `folder`. Returns a message.
     Q_INVOKABLE QString exportWav(const QUrl &folder);
+    // Development aid for screenshots (MICFORGE_MICTEST_DEMO): synthetic takes, no microphone involved.
+    void loadDemoTake();
 
 signals:
     void stateChanged();

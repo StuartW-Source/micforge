@@ -133,6 +133,11 @@ if(MICFORGE_BUILD_TESTS)
     target_link_libraries(audiocore_test PRIVATE Qt6::Core Threads::Threads ${CMAKE_DL_LIBS})
     add_test(NAME audiocore COMMAND audiocore_test)
 
+    add_executable(privacy_test tests/privacy_test.cpp)
+    target_include_directories(privacy_test PRIVATE src)
+    target_link_libraries(privacy_test PRIVATE Qt6::Core)
+    add_test(NAME privacy COMMAND privacy_test)
+
     add_executable(autostart_test tests/autostart_test.cpp src/platform/autostart_xdg.cpp)
     target_include_directories(autostart_test PRIVATE src)
     target_link_libraries(autostart_test PRIVATE Qt6::Core)

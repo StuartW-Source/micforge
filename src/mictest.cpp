@@ -137,6 +137,9 @@ void MicTestSession::finishRecording() {
             notes << tr("There's little difference between your voice and the background (%1 dB). "
                         "Did you speak during the test? A closer mic position or Noise Removal helps.")
                          .arg(qRound(m_raw.dynamicRangeDb));
+        else if (m_proc.valid && m_proc.noiseFloorDb < -90.0f)
+            notes << tr("Processing silences the background between your words completely (it was %1 dB below your voice).")
+                         .arg(qRound(m_raw.dynamicRangeDb));
         else if (m_proc.valid && m_proc.dynamicRangeDb > m_raw.dynamicRangeDb + 6.0f)
             notes << tr("Processing widens the gap between your voice and the background from %1 dB to %2 dB.")
                          .arg(qRound(m_raw.dynamicRangeDb)).arg(qRound(m_proc.dynamicRangeDb));
@@ -150,6 +153,26 @@ void MicTestSession::finishRecording() {
     emit progressChanged();
     emit takeChanged();
     setState(m_frames ? "ready" : "idle");
+}
+
+void MicTestSession::loadDemoTake() {
+    const size_t n = size_t(m_seconds) * AudioCore::kRate;
+    m_core.prepareTest(n);
+    MicTest &t = m_core.test;
+    unsigned seed = 7;
+    for (size_t i = 0; i < n; ++i) {
+        seed = seed * 1664525u + 1013904223u;
+        const float noise = (float(seed >> 8) / float(1u << 24) - 0.5f) * 0.02f;
+        const double sec = double(i) / AudioCore::kRate;
+        const bool talk = std::fmod(sec, 1.6) < 1.0;
+        const float env = talk ? float(0.5 + 0.5 * std::sin(sec * 9.0)) : 0.0f;
+        const float voice = env * 0.25f * float(std::sin(2 * M_PI * 180 * sec) + 0.4 * std::sin(2 * M_PI * 540 * sec));
+        t.raw[i] = voice + noise;
+        t.processed[i] = talk ? 1.6f * voice + 0.1f * noise : 0.0005f * noise;
+    }
+    t.pos.store(n);
+    m_clipsAtStart = m_core.stats.inputClips.load();
+    finishRecording();
 }
 
 namespace {

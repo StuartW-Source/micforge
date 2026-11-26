@@ -143,6 +143,8 @@ int main(int argc, char *argv[]) {
     ctx->setContextProperty("initialPage", qEnvironmentVariable("MICFORGE_PAGE"));
     ctx->setContextProperty("initialSetup", qEnvironmentVariableIsSet("MICFORGE_SETUP"));
     ctx->setContextProperty("initialLibrary", qEnvironmentVariableIsSet("MICFORGE_LIBRARY"));
+    if (qEnvironmentVariableIsSet("MICFORGE_TEST") && qEnvironmentVariableIsSet("MICFORGE_MICTEST_DEMO"))
+        controller.micTest()->loadDemoTake(); // screenshot aid: synthetic takes, no microphone involved
     ctx->setContextProperty("initialTheme", qEnvironmentVariable("MICFORGE_THEME")); // screenshot aid: dark | light
     ctx->setContextProperty("initialExpandPlugin", qEnvironmentVariableIsSet("MICFORGE_EXPAND_PLUGIN"));
     engine.load(QUrl("qrc:/qml/Main.qml"));
@@ -271,6 +273,11 @@ int main(int argc, char *argv[]) {
         if (size.size() == 2 && size[0].toInt() > 0 && size[1].toInt() > 0) window->resize(size[0].toInt(), size[1].toInt());
         QTimer::singleShot(qEnvironmentVariableIntValue("MICFORGE_SNAPSHOT_DELAY") > 0 ? qEnvironmentVariableIntValue("MICFORGE_SNAPSHOT_DELAY") : 2500, &app, [&] {
             window->grabWindow().save(snapshot);
+            // MICFORGE_REPORT=<file> (test instance only): also write a diagnostic report, for checking its privacy.
+            if (const QString rep = qEnvironmentVariable("MICFORGE_REPORT"); !rep.isEmpty() && qEnvironmentVariableIsSet("MICFORGE_TEST")) {
+                controller.diagnostics()->refresh();
+                controller.diagnostics()->saveReport(QUrl::fromLocalFile(rep), false, true);
+            }
             app.quit();
         });
     }
