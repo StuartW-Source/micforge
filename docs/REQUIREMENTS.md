@@ -40,7 +40,8 @@ whether a USB mic, headset, or one channel of a multi-input audio interface.
   - It works in either direction (user bassier or brighter than the other voices), whichever the
     measurements show.
   - It's disabled for laptop/webcam mics, where it isn't reliable.
-- R1.4 The gate never clips the start of words, even with a high threshold (look-ahead).
+- R1.4 The gate never clips the start of words, even with a high threshold (look-ahead), and other
+  processing before it (noise removal) can't delay its opening.
 - R1.5 The user can **see** the separation:
   - **Gate meter:** labelled zones for room noise, other voices and "you", plus the open/close lines.
   - **Closeness bar:** marks for the user and the other voices, plus the current sound.

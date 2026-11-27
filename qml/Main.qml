@@ -335,6 +335,8 @@ ApplicationWindow {
                         n.push({ kind: "danger", text: "Muted: your apps are receiving silence.", action: "Unmute" })
                     else if (win.bypassed)
                         n.push({ kind: "warn", text: "Comparing: apps hear your RAW microphone (only input gain applied).", action: "Turn processing back on" })
+                    if (controller.setupOutdated && !controller.safeMode)
+                        n.push({ kind: "info", text: "The Voice Gate now listens to your microphone before Noise Removal, so it no longer clips the start of sentences. Run Setup again so its tuning matches (about a minute).", action: "Run Setup" })
                     if (controller.presetNotice !== "")
                         n.push({ kind: "warn", text: controller.presetNotice, action: "Dismiss" })
                     if (controller.profileNotice !== "")
@@ -373,6 +375,7 @@ ApplicationWindow {
                                 case "Unmute": controller.muted = false; break
                                 case "Turn processing back on": controller.setParam("bypass", 0); break
                                 case "OK": controller.dismissProfileNotice(); break
+                                case "Run Setup": win.openSetup(); break
                                 case "Dismiss": controller.dismissPresetNotice(); break
                                 default: controller.requestRestart(false)
                                 }

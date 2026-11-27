@@ -498,6 +498,7 @@ public:
 
     void reset() {
         for (auto &b : lowCut) b.reset();
+        for (auto &b : listenCut) b.reset();
         for (auto &b : tone) b.reset();
         for (auto &b : eq) b.reset();
         deHp.reset();
@@ -643,6 +644,17 @@ private:
                 continue;
             }
 
+            // What the Voice Gate (and Setup, and the spectrum view) listens to: the microphone after
+            // Low Cut, but before Noise Removal. Noise Removal stays nearly silent for the first moments of
+            // speech and also removes energy in the low band the gate often listens to, which made the gate
+            // open 20-40 ms late and clip the start of phrases. Noise Removal delays the audio by 10 ms, so
+            // listening before it also gives the gate 10 ms of look-ahead for free.
+            float listen = x;
+            if (fLowCut.on) {
+                listen = listenCut[0].process(listen);
+                if (lowCutSteep) listen = listenCut[1].process(listen);
+            }
+
             // 2. AI noise removal (RNNoise works on 480-sample frames: 10 ms delay).
             if (fNoise.running() && denoise) {
                 const float wet = nOut[nPos] * (1.0f / 32768.0f);
@@ -671,12 +683,12 @@ private:
 
             // 4. Gate / expander. The detector listens to a filtered band; the audio
             //    itself is delayed slightly (look-ahead) so word starts aren't clipped.
-            if (recorder) recorder->push(x);
-            if (scope && scope->on.load(std::memory_order_relaxed)) scope->push(x);
+            if (recorder) recorder->push(listen);
+            if (scope && scope->on.load(std::memory_order_relaxed)) scope->push(listen);
             if (fGate.running()) {
-                const float env = det.process(x);
+                const float env = det.process(listen);
                 gateLvl = std::max(gateLvl, env);
-                tilt.process(x);
+                tilt.process(listen);
                 if (env > gateCloseLin) { tiltLowSum += tilt.lowP; tiltHiSum += tilt.hiP; }
 
                 gDelay[gPos] = x;
@@ -896,8 +908,11 @@ private:
         if (lowCutSteep) { // 4th-order Butterworth = two stages
             lowCut[0].set(Biquad::HP, fs, p.get(LowCutFreq), 0.5412, 0, jump);
             lowCut[1].set(Biquad::HP, fs, p.get(LowCutFreq), 1.3066, 0, jump);
+            listenCut[0].set(Biquad::HP, fs, p.get(LowCutFreq), 0.5412, 0, jump);
+            listenCut[1].set(Biquad::HP, fs, p.get(LowCutFreq), 1.3066, 0, jump);
         } else {
             lowCut[0].set(Biquad::HP, fs, p.get(LowCutFreq), 0.7071, 0, jump);
+            listenCut[0].set(Biquad::HP, fs, p.get(LowCutFreq), 0.7071, 0, jump);
         }
 
         fGate.set(active(GateAdded, GateOn), jump, fs);
@@ -1014,6 +1029,7 @@ private:
     bool plosiveOn = true;
     bool lowCutSteep = true;
     SmoothBiquad lowCut[2];
+    SmoothBiquad listenCut[2]; // the same low cut on what the gate hears (before noise removal)
 
     bool expander = false;
     GateDetector det;

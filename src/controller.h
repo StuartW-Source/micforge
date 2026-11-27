@@ -46,6 +46,8 @@ class Controller : public QObject {
     // Per-microphone Setup: a message after switching mics, and the microphones that have a saved Setup.
     Q_PROPERTY(QString profileNotice READ profileNotice NOTIFY profileNoticeChanged)
     Q_PROPERTY(QString presetNotice READ presetNotice NOTIFY presetsChanged)
+    // True when Setup was measured before the Voice Gate started listening ahead of Noise Removal (0.2.1).
+    Q_PROPERTY(bool setupOutdated READ setupOutdated NOTIFY zonesChanged)
     // Undo/redo of sound settings ("" when there's nothing to undo/redo).
     Q_PROPERTY(QString undoText READ undoText NOTIFY undoChanged)
     // System-wide shortcuts (mute, push-to-talk) through the desktop.
@@ -127,6 +129,7 @@ public:
     DetectorSpectrum *spectrum() { return m_spectrum; }
     QString profileNotice() const { return m_profileNotice; }
     QString presetNotice() const { return m_presetNotice; }
+    bool setupOutdated() const;
     QString undoText() const { return m_undo.undoLabel(); }
     QString redoText() const { return m_undo.redoLabel(); }
     bool shortcutsAvailable() const { return m_shortcuts && m_shortcuts->available(); }

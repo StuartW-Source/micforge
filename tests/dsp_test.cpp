@@ -703,6 +703,49 @@ int main() {
         check(std::fabs(energyDb(yOn, 3, true) - energyDb(yOff, 3, true)) < 0.5, "breath reduction: 's' untouched (dB)", energyDb(yOn, 3, true) - energyDb(yOff, 3, true));
         check(std::fabs(energyDb(yOn, 4, true) - energyDb(yOff, 4, true)) < 1.0, "breath reduction: 'h' at a word start untouched (dB)", energyDb(yOn, 4, true) - energyDb(yOff, 4, true));
     }
+    if (rnnoise::available()) { // The gate must hear the mic itself: Noise Removal can't delay its opening.
+        const int L = 48000 * 8;
+        auto voice = synthVoice(L, 0.25f);
+        std::vector<float> in(static_cast<size_t>(L) * 2);
+        std::vector<size_t> starts;
+        unsigned sd = 21;
+        for (int i = 0; i < L; ++i) {
+            sd = sd * 1664525u + 1013904223u;
+            const float room = 0.0015f * ((sd >> 8) / float(1u << 24) - 0.5f) * 3.46f;   // room noise, about -57 dB
+            const double t = std::fmod(i / 48000.0, 2.0);
+            const bool talk = t >= 0.8 && t < 1.8;                                          // 1 s phrase after 0.8 s quiet
+            if (talk && t - 0.8 < 1.0 / 48000) starts.push_back(size_t(i));
+            in[2 * size_t(i)] = room + (talk ? voice[size_t(i)] : 0.0f);
+        }
+        Params ref; allOff(ref);
+        auto yRef = run(ref, in);
+        auto startLoss = [&](const std::vector<float> &y, int extraDelay) {
+            double lr = 0, ly = 0;
+            for (size_t st : starts) for (size_t k = st; k < st + 40 * 48 && k + size_t(extraDelay) < y.size(); ++k) {
+                lr += double(yRef[k]) * yRef[k];
+                ly += double(y[k + size_t(extraDelay)]) * y[k + size_t(extraDelay)];
+            }
+            return 10 * std::log10(lr / (ly + 1e-20));
+        };
+        auto gateParams = [&](Params &g) {
+            g.set(GateOn, 1); g.set(GateFocus, 1); g.set(GateScLow, 20); g.set(GateScHigh, 150); g.set(GateThreshold, -55); g.set(GateRange, -40);
+        };
+        Params gateOnly; allOff(gateOnly); gateParams(gateOnly);
+        Params both; allOff(both); gateParams(both); both.set(NoiseAdded, 1); both.set(NoiseOn, 1); both.set(NoiseAmount, 100);
+        Params nrOnly; allOff(nrOnly); nrOnly.set(NoiseAdded, 1); nrOnly.set(NoiseOn, 1); nrOnly.set(NoiseAmount, 100);
+        const double alone = startLoss(run(gateOnly, in), 0), nrAlone = startLoss(run(nrOnly, in), 480), withNr = startLoss(run(both, in), 480);
+        std::printf("       (first 40 ms of phrases: gate alone %.1f dB down, noise removal alone %.1f dB down)\n", alone, nrAlone);
+        // Before: the gate heard noise removal's output and opened late (6.2 dB here; 50 dB on a real phrase).
+        check(withNr < std::max(alone, nrAlone) + 1.5, "gate + noise removal: the gate adds no loss of its own at phrase starts (dB down)", withNr);
+        // Noise removal still cleans what the apps hear between phrases (gate off).
+        Params nr; allOff(nr); nr.set(NoiseAdded, 1); nr.set(NoiseOn, 1); nr.set(NoiseAmount, 100);
+        auto y = run(nr, in);
+        double e = 0; size_t n = 0;
+        for (size_t i = 48000 * 2; i < y.size(); ++i) if (std::fmod(i / 48000.0, 2.0) < 0.6) { e += double(y[i]) * y[i]; ++n; }
+        check(10 * std::log10(e / double(n) + 1e-20) < -75, "noise removal still removes room noise between phrases (dB)", 10 * std::log10(e / double(n) + 1e-20));
+    } else {
+        std::printf("[SKIP] gate + noise removal tests (rnnoise not installed)\n");
+    }
     { // A sustained vowel ("aaah", 2.5 s, perfectly steady) is not mistaken for background noise.
         const int L = 48000 * 4;
         std::vector<float> in(static_cast<size_t>(L) * 2);
