@@ -4,7 +4,7 @@
 # After tagging a new release: bump pkgver, run `updpkgsums`, then `makepkg --printsrcinfo > .SRCINFO`.
 
 pkgname=micforge
-pkgver=0.2.1
+pkgver=0.2.2
 pkgrel=1
 pkgdesc="Microphone processor for PipeWire: voice-only gate, AI noise removal, effects, voice changer and VST3/LV2 plugin hosting"
 arch=('x86_64' 'aarch64')

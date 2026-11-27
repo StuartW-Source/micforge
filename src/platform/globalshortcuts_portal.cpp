@@ -53,7 +53,7 @@ public:
         auto bus = QDBusConnection::sessionBus();
         bus.connect(kService, kPath, kIface, "Activated", this, SLOT(activated(QDBusObjectPath, QString, qulonglong, QVariantMap)));
         bus.connect(kService, kPath, kIface, "Deactivated", this, SLOT(deactivated(QDBusObjectPath, QString, qulonglong, QVariantMap)));
-        bus.connect(kService, kPath, kIface, "ShortcutsChanged", this, SLOT(shortcutsChanged(QDBusObjectPath, QDBusArgument)));
+        bus.connect(kService, kPath, kIface, "ShortcutsChanged", this, SLOT(shortcutsChanged(QDBusMessage)));
     }
 
     bool available() const override { return m_version > 0; }
@@ -81,9 +81,12 @@ private slots:
     void deactivated(const QDBusObjectPath &session, const QString &id, qulonglong, const QVariantMap &) {
         if (session.path() == m_session && onDeactivated) onDeactivated(id);
     }
-    void shortcutsChanged(const QDBusObjectPath &session, const QDBusArgument &list) {
-        if (session.path() != m_session) return;
-        readTriggers(list);
+    // Takes the whole message: QtDBus can't connect a slot with a QDBusArgument parameter by signature.
+    void shortcutsChanged(const QDBusMessage &msg) {
+        const QVariantList args = msg.arguments();
+        if (args.size() < 2) return;
+        if (qvariant_cast<QDBusObjectPath>(args.at(0)).path() != m_session) return;
+        readTriggers(args.at(1).value<QDBusArgument>());
     }
     void response(uint code, const QVariantMap &results) {
         const QString step = m_pendingStep;
