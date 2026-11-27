@@ -2,6 +2,19 @@
 
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [0.2.1] - 2026-11-27
+
+### Fixed
+- **The start of sentences could be cut off** when Noise Removal and the Voice Gate were both on. Noise
+  Removal stays almost silent for the first moments of speech and removes low-frequency energy the gate
+  often listens to, so the gate opened 20–40 ms late. The gate now listens to the microphone before Noise
+  Removal (which also gives it 10 ms of look-ahead without extra delay). On a user's recording the worst
+  phrase start went from 50 dB down to 19 dB down (first 60 ms), with no other phrase worse and other
+  voices still kept out. Setup now measures the same sound the gate hears; a notice suggests re-running it.
+
+### Added
+- `tests/replay_mictest.cpp`: diagnose quiet sentence starts from a Mic Test export (local only).
+
 ## [0.2.0] - 2026-11-26
 
 ### Fixed

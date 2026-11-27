@@ -65,6 +65,13 @@ exercise Setup profiles).
   the CMake build (cmake not installed), keyboard traversal by hand, live desktop theme switching,
   fractional scaling.
 
+- 2026-11-27 (fix: quiet sentence starts): diagnosed on the user's 30 s Mic Test export (local, read-only)
+  with what became `tests/replay_mictest.cpp`. Two measurement mistakes on the way, corrected: averaging
+  dB over 20 ms frames let room-hum frames count as "speech", and a peak envelope never registered pauses.
+  Root cause: the gate listened after noise removal. dsp_test: gate + noise removal at phrase starts 6.2 dB
+  on 0.2.0 (fail) -> 3.1 dB (noise removal alone 2.3). User recording: worst phrase 50.2 -> 18.6 dB, others
+  unchanged or better, other voices 29.9 dB down, room noise -82.4 dB, both unchanged. Rejected: blending
+  the un-denoised sound back in (fixed one phrase, made others 1-3 dB worse).
 - 2026-11-26 (Phase 5, plugin host): ctest 12/12 (new: bridge, remoteplugin); plugin_editor_check with
   LSP Compressor Mono VST3 (installed by the user for this). Note: in the test binaries `qInfo` output
   is suppressed, so helper diagnostics are also delivered via `onLog`.

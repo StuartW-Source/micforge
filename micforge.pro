@@ -1,6 +1,6 @@
 TEMPLATE = app
 TARGET = micforge
-VERSION = 0.2.0
+VERSION = 0.2.1
 
 QT += core gui widgets qml quick quickcontrols2 network concurrent dbus
 CONFIG += c++20 link_pkgconfig release

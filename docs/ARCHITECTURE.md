@@ -20,7 +20,9 @@ max-since-last-read) and lock-free `Ring` buffers (virtual mic, monitor).
 ```
 PipeWire capture (stereo, chosen node) ─► VoiceChain::process
   channel select → input gain → [noise removal] → [hum removal] → low cut (+ plosive guard)
-  → voice gate (detector: band filter + closeness + adaptive floor + optional voice detector)
+  → voice gate (detector: band filter + closeness + adaptive floor + optional voice detector; since 0.2.1
+    the detector, Setup's recordings and the spectrum view use the mic after low cut but BEFORE noise
+    removal, so noise removal's onset silence can't delay the gate)
   → [breath reduction] → [auto level] → compressor → [de-esser] → [voice changer] → [EQ] → tone
   → (block hook) PluginRack → [warmth] → [exciter] → [doubler] → [echo] → [reverb] → output gain → limiter
 ─► Ring ─► virtual mic stream (Audio/Source "MicForge (processed mic)")

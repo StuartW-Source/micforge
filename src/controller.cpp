@@ -415,6 +415,12 @@ QVariantList Controller::micProfiles() const {
     return out;
 }
 
+bool Controller::setupOutdated() const {
+    QSettings s;
+    return s.value("calib/valid").toBool() && s.value("calib/listens").toString() != "mic"
+           && m_params.value("noiseAdded").toDouble() > 0.5 && m_params.value("noiseOn").toDouble() > 0.5;
+}
+
 void Controller::dismissProfileNotice() {
     m_profileNotice.clear();
     emit profileNoticeChanged();
@@ -1022,6 +1028,7 @@ void Controller::applyAnalysis(const SeparationResult &r) {
     // Remember the measured zones so the gate meter can show them.
     QSettings s;
     s.setValue("calib/valid", true);
+    s.setValue("calib/listens", "mic"); // measured on what the gate hears: the mic before Noise Removal
     s.setValue("calib/room", r.roomDb + d);
     s.setValue("calib/others", r.hadOthers ? r.othersDb + d : -200.0);
     s.setValue("calib/you", r.youDb + d);
