@@ -2,7 +2,7 @@
 
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
-## [Unreleased]
+## [0.2.1] - 2026-11-27
 
 ### Fixed
 - **The start of sentences could be cut off** when Noise Removal and the Voice Gate were both on. Noise
