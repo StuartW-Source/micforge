@@ -30,6 +30,11 @@
   </categories>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.2" date="2026-11-27">
+      <description>
+        <p>Fixes MicForge not noticing when you change its system-wide shortcuts in the desktop settings.</p>
+      </description>
+    </release>
     <release version="0.2.1" date="2026-11-27">
       <description>
         <p>Fixes the start of sentences being cut off or quiet when Noise Removal and the Voice Gate are both on: the gate now listens to the microphone before Noise Removal. Run Setup again once after updating.</p>

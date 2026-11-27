@@ -5,7 +5,7 @@
 #   ctest --test-dir build-cmake --output-on-failure
 #   cmake --install build-cmake --prefix ~/.local
 cmake_minimum_required(VERSION 3.21)
-project(MicForge VERSION 0.2.1 LANGUAGES C CXX)
+project(MicForge VERSION 0.2.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

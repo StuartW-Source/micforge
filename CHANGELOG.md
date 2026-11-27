@@ -2,6 +2,13 @@
 
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [0.2.2] - 2026-11-27
+
+### Fixed
+- **Changing MicForge's system-wide shortcuts in the desktop settings wasn't noticed** until MicForge
+  restarted (the shortcut list in Settings showed the old keys). MicForge couldn't subscribe to the
+  portal's "shortcuts changed" signal and logged "Could not connect … ShortcutsChanged" at every start.
+
 ## [0.2.1] - 2026-11-27
 
 ### Fixed
