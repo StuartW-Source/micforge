@@ -133,6 +133,9 @@ enum ParamId {
     LowCutPlosive,  // 1 = Low Cut also tames "p"/"b" pops (dynamic bass cut on sudden low-frequency bursts)
     BreathOn,       // 1 = turn down breaths between phrases (opt-in)
     BreathAmount,   // dB of reduction for breaths
+    VcFormant,      // semitones: voice size (formants); equal to VcPitch = classic shifter (formants follow pitch)
+    VcGrowl,        // % rough, irregular rattle (monsters, orcs, dragons)
+    VcWhisper,      // % breathy/whispered (random phase in the formant shifter)
     PARAM_COUNT
 };
 
@@ -270,6 +273,9 @@ inline constexpr ParamDef kParams[PARAM_COUNT] = {
     {"lowCutPlosive",  1,     0,    1},
     {"breathOn",       0,     0,    1},
     {"breathAmount",  12,     3,   30},
+    {"vcFormant",      0,    -12,   12},
+    {"vcGrowl",        0,     0,    100},
+    {"vcWhisper",      0,     0,    100},
 };
 
 } // namespace mf
@@ -284,6 +290,6 @@ constexpr bool keyIs(int id, const char *k) {
 static_assert(keyIs(InputGain, "inputGain") && keyIs(GateAdded, "gateAdded") && keyIs(GateTiltDir, "gateTiltDir") &&
               keyIs(AutoLevelSpeed, "autoLevelSpeed") && keyIs(CompMakeup, "compMakeup") && keyIs(VcMix, "vcMix") &&
               keyIs(Eq5Q, "eq5Q") && keyIs(ToneAir, "toneAir") && keyIs(PluginsOn, "pluginsOn") && keyIs(ReverbMix, "reverbMix") &&
-              keyIs(Bypass, "bypass") && keyIs(Mute, "mute") && keyIs(GateAdaptive, "gateAdaptive") && keyIs(GateVadThreshold, "gateVadThreshold") && keyIs(LowCutPlosive, "lowCutPlosive") && keyIs(BreathAmount, "breathAmount"),
+              keyIs(Bypass, "bypass") && keyIs(Mute, "mute") && keyIs(GateAdaptive, "gateAdaptive") && keyIs(GateVadThreshold, "gateVadThreshold") && keyIs(LowCutPlosive, "lowCutPlosive") && keyIs(BreathAmount, "breathAmount") && keyIs(VcWhisper, "vcWhisper"),
               "kParams rows are out of step with the ParamId enum");
 } // namespace mf

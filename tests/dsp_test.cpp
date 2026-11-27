@@ -5,6 +5,7 @@
 #include "separation.h"
 #include "spectrum.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <vector>
 
@@ -95,7 +96,7 @@ static double truePeakDb(const std::vector<float> &y, int from) {
 }
 
 // Synthetic voiced speech: jittered ~120 Hz glottal pulses through three formant resonators, 3 syllables/s.
-static std::vector<float> synthVoice(int n, float peak) {
+static std::vector<float> synthVoice(int n, float peak, double glide = 0.08) {
     std::vector<float> v(static_cast<size_t>(n));
     Biquad f1, f2, f3, lp;
     f1.set(Biquad::Peak, 48000, 700, 4, 18); f2.set(Biquad::Peak, 48000, 1200, 5, 14); f3.set(Biquad::Peak, 48000, 2600, 6, 10);
@@ -104,7 +105,7 @@ static std::vector<float> synthVoice(int n, float peak) {
     for (int i = 0; i < n; ++i) {
         seed = seed * 1664525u + 1013904223u;
         const double t = i / 48000.0;
-        const double f0 = 120 * (1 + 0.08 * std::sin(2 * M_PI * 0.7 * t)) * (1 + 0.01 * ((seed >> 8) / double(1u << 24) - 0.5));
+        const double f0 = 120 * (1 + glide * std::sin(2 * M_PI * 0.7 * t)) * (1 + 0.01 * ((seed >> 8) / double(1u << 24) - 0.5));
         ph += f0 / 48000; float pulse = 0; if (ph >= 1) { ph -= 1; pulse = 1; }
         const double env = std::pow(std::max(0.0, std::sin(2 * M_PI * 3 * t)), 0.6);
         v[size_t(i)] = float(env * lp.process(f3.process(f2.process(f1.process(pulse)))));
@@ -778,6 +779,64 @@ int main() {
         auto env = peakEnvelope(x.data(), x.size(), 400);
         check(env.size() == 400 && env[0] == 1.0f && env[399] > 0.25f, "levels: waveform envelope", env[399]);
         check(!analyseLevels(x.data(), 1000, 48000).valid, "levels: too-short take is rejected", 0);
+    }
+    { // Voice Changer: pitch and voice size (formants) move independently; loudness stays put.
+        // A wide pitch glide (66-174 Hz) so the long-term spectrum shows the formants, not single harmonics.
+        const auto v = synthVoice(48000 * 6, 0.3f, 0.45);
+        auto render = [&](float pitch, float formant, float growl, float whisper, float drive, int &lat) {
+            VoiceChanger vc; Biquad lo, hi, bh, bl;
+            vc.configure(48000, pitch, 0, 0, 50, 0, drive, 0, 5, 100, formant, growl, whisper); vc.reset();
+            lat = vc.useShifter ? vc.shifter.latency() : 0;
+            std::vector<float> y(v.size());
+            for (size_t i = 0; i < v.size(); ++i) y[i] = vc.process(v[i], lo, hi, bh, bl);
+            return y;
+        };
+        // median f0 ratio (autocorrelation) and level change over loud 40 ms frames, aligned by the latency
+        auto compare = [&](const std::vector<float> &y, int lat, double &ratio, double &dB) {
+            std::vector<double> rs; double ei = 0, eo = 0;
+            auto f0 = [](const float *x) { double best = 0; int bl = 0;
+                for (int l = 60; l <= 600; ++l) { double c = 0, a = 0, b = 0; for (int i = 0; i < 1920 - l; ++i) { c += x[i] * x[i + l]; a += x[i] * x[i]; b += x[i + l] * x[i + l]; }
+                    const double r = c / std::sqrt(a * b + 1e-12); if (r > best) { best = r; bl = l; } }
+                return best > 0.7 ? 48000.0 / bl : 0.0; };
+            for (size_t i = 48000; i + 1920 + size_t(lat) + 700 < v.size(); i += 1920) {
+                double a = 0, b = 0; for (size_t k = 0; k < 1920; ++k) { a += double(v[i + k]) * v[i + k]; b += double(y[i + k + size_t(lat)]) * y[i + k + size_t(lat)]; }
+                if (10 * std::log10(a / 1920) < -30) continue;
+                ei += a; eo += b;
+                const double fa = f0(&v[i]), fb = f0(&y[i + size_t(lat)]); if (fa > 0 && fb > 0) rs.push_back(fb / fa);
+            }
+            std::sort(rs.begin(), rs.end()); ratio = rs.empty() ? 0 : rs[rs.size() / 2]; dB = 10 * std::log10(eo / ei);
+        };
+        // Formant shift in semitones: how far the long-term spectral envelope (150-5000 Hz, smoothed over
+        // ±2 st so single harmonics don't count) must slide on a log-frequency axis to line up with the input's.
+        auto envelope = [](const std::vector<float> &y) { auto p = averageSpectrum(y, 2048); std::vector<double> v, o;
+            for (double st = 0; st < 12 * std::log2(5000.0 / 150); st += 0.1) { const double k = 150 * std::pow(2, st / 12) * 2048 / 48000; const size_t i = size_t(k);
+                v.push_back(10 * std::log10(p[i] + (p[i + 1] - p[i]) * (k - double(i)) + 1e-14)); }
+            for (size_t i = 0; i < v.size(); ++i) { double s = 0; int c = 0; for (int d = -20; d <= 20; ++d) if (i + size_t(d) < v.size()) { s += v[i + size_t(d)]; ++c; } o.push_back(s / c); }
+            return o; };
+        const auto env0 = envelope(v);
+        auto formantShift = [&](const std::vector<float> &y) { const auto e = envelope(y); double bs = 0, bc = -2;
+            for (int sh = -140; sh <= 140; ++sh) { double ma = 0, mb = 0, c = 0, a = 0, b = 0; int n = 0;
+                for (size_t i = 0; i < env0.size(); ++i) { const long j = long(i) + sh; if (j < 0 || j >= long(e.size())) continue; ma += env0[i]; mb += e[size_t(j)]; ++n; }
+                if (n < 150) continue; ma /= n; mb /= n;
+                for (size_t i = 0; i < env0.size(); ++i) { const long j = long(i) + sh; if (j < 0 || j >= long(e.size())) continue;
+                    c += (env0[i] - ma) * (e[size_t(j)] - mb); a += (env0[i] - ma) * (env0[i] - ma); b += (e[size_t(j)] - mb) * (e[size_t(j)] - mb); }
+                if (c / std::sqrt(a * b) > bc) { bc = c / std::sqrt(a * b); bs = sh / 10.0; } }
+            return bs; };
+        int lat = 0; double r = 0, dB = 0;
+        auto y = render(5, 0, 0, 0, 0, lat); compare(y, lat, r, dB);
+        check(lat > 0 && std::fabs(r / std::pow(2.0, 5 / 12.0) - 1) < 0.02, "voice changer: +5 st with formants kept: pitch ratio", r);
+        check(std::fabs(formantShift(y)) < 1.0, "voice changer: +5 st with formants kept: formants stay (st)", formantShift(y));
+        check(std::fabs(dB) < 1.5, "voice changer: formant shifter keeps the loudness (dB)", dB);
+        y = render(0, 4, 0, 0, 0, lat); compare(y, lat, r, dB);
+        check(std::fabs(r - 1) < 0.02, "voice changer: voice size +4 st: pitch unchanged (ratio)", r);
+        check(std::fabs(formantShift(y) - 4) < 1.0, "voice changer: voice size +4 st: formants move up (st)", formantShift(y));
+        y = render(-6, -6, 0, 0, 0, lat);
+        check(lat == 0, "voice changer: size equal to pitch uses the classic, low-latency shifter", lat);
+        y = render(-6, -5, 60, 0, 12, lat); compare(y, lat, r, dB);
+        bool finite = true; for (float x : y) finite = finite && std::isfinite(x);
+        check(finite && std::fabs(dB) < 3, "voice changer: Monster (growl + drive) stays near the input loudness (dB)", dB);
+        y = render(0, 0, 0, 100, 0, lat); compare(y, lat, r, dB);
+        check(std::fabs(dB) < 2, "voice changer: full whisper keeps the loudness (dB)", dB);
     }
     std::printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;

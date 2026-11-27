@@ -410,7 +410,22 @@ ApplicationWindow {
         onPicked: (id) => win.openStage(id)
     }
 
+    // System-wide voice shortcuts: switch to that voice, or back to your own voice if it's already on.
+    Connections {
+        target: controller
+        function onVoiceShortcut(id) {
+            var vcActive = controller.params.vcAdded > 0.5 && controller.params.vcOn > 0.5
+            if (id === "off") { if (vcActive) controller.setParam("vcOn", 0); return }
+            var pr = Theme.voicePresetById(id)
+            if (!pr) return
+            if (vcActive && Theme.matches(controller.params, pr.values)) { controller.setParam("vcOn", 0); return }
+            Theme.applyPreset(controller, pr.values)
+            if (!vcActive) controller.addEffect("vc")
+        }
+    }
+
     Component.onCompleted: {
+        controller.setVoiceList(Theme.voicePresets.map((p) => ({ id: p.id, name: p.name })))
         if (initialPage !== "") {
             if (pages.some(pg => pg.id === initialPage)) page = initialPage
             else openStage(initialPage)

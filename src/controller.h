@@ -57,6 +57,9 @@ class Controller : public QObject {
     Q_PROPERTY(QString shortcutsStatus READ shortcutsStatus NOTIFY shortcutsChanged)
     Q_PROPERTY(QString muteKey READ muteKey NOTIFY shortcutsChanged)
     Q_PROPERTY(QString pushToTalkKey READ pushToTalkKey NOTIFY shortcutsChanged)
+    // One shortcut per Voice Changer preset (plus "back to your own voice"), opt-in.
+    Q_PROPERTY(bool voiceShortcutsEnabled READ voiceShortcutsEnabled WRITE setVoiceShortcutsEnabled NOTIFY shortcutsChanged)
+    Q_PROPERTY(QVariantMap voiceKeys READ voiceKeys NOTIFY shortcutsChanged)
     Q_PROPERTY(QString redoText READ redoText NOTIFY undoChanged)
     Q_PROPERTY(QVariantList micProfiles READ micProfiles NOTIFY profileNoticeChanged)
 
@@ -141,6 +144,11 @@ public:
     QString muteKey() const { return m_shortcuts ? m_shortcuts->triggers().value("mute") : QString(); }
     QString pushToTalkKey() const { return m_shortcuts ? m_shortcuts->triggers().value("push-to-talk") : QString(); }
     Q_INVOKABLE void configureShortcuts() { if (m_shortcuts) m_shortcuts->configure(); }
+    bool voiceShortcutsEnabled() const { return m_voiceShortcutsEnabled; }
+    void setVoiceShortcutsEnabled(bool on);
+    QVariantMap voiceKeys() const; // preset id ("off" = your own voice) -> key description
+    // The UI lists its Voice Changer presets once at start: [{id, name}, ...].
+    Q_INVOKABLE void setVoiceList(const QVariantList &voices);
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
     Q_INVOKABLE void dismissPresetNotice() { m_presetNotice.clear(); emit presetsChanged(); }
@@ -227,6 +235,7 @@ signals:
     void themeModeChanged();
     void undoChanged();
     void shortcutsChanged();
+    void voiceShortcut(const QString &id); // a voice's system-wide shortcut was pressed ("off" = your own voice)
     void profileNoticeChanged();
     void presetsChanged();
     void calibChanged();
@@ -264,7 +273,10 @@ private:
     QString m_profileNotice;
     QString m_presetNotice;
     std::unique_ptr<mf::IGlobalShortcuts> m_shortcuts;
-    bool m_shortcutsEnabled = false, m_pushToTalk = false;
+    bool m_shortcutsEnabled = false, m_pushToTalk = false, m_voiceShortcutsEnabled = false;
+    QVariantList m_voiceList;
+    bool m_bindScheduled = false;
+    void scheduleBind();
     void bindShortcuts();
     UndoStack m_undo;
     std::array<double, mf::PARAM_COUNT> m_shadow{}; // last value applied, per parameter (for undo)

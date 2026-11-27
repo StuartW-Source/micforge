@@ -76,6 +76,8 @@ bool PresetFile::fromJson(const QByteArray &data, PresetFile &out, QString *erro
         if (id < 0 || isSetupKey(it.key()) || !it.value().isDouble()) { out.ignored << it.key(); continue; }
         out.params[it.key()] = std::clamp(it.value().toDouble(), double(kParams[id].min), double(kParams[id].max));
     }
+    // Presets from before 0.3.0 have no "vcFormant": their formants followed the pitch.
+    if (out.params.contains("vcPitch") && !out.params.contains("vcFormant")) out.params["vcFormant"] = out.params["vcPitch"];
     if (out.params.isEmpty() && !out.hasPlugins) return fail(QStringLiteral("This preset contains no settings MicForge knows."));
     return true;
 }
