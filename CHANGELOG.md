@@ -2,7 +2,7 @@
 
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
-## [Unreleased]
+## [0.3.0] - 2026-11-27
 
 ### Added
 - **New Voice Changer voices**, grouped into Everyday (Child, Woman, Man), Fantasy for tabletop and RPG games
