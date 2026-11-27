@@ -43,5 +43,13 @@ int main() {
           "a newer format is refused politely");
     check(!PresetFile::fromJson(R"({"format":"something-else","version":2})", bad, &err), "other apps' JSON rejected");
     std::printf("\npreset file tests: %s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
+    { // Presets from before the voice-size control keep their sound: formants follow the pitch.
+        PresetFile old;
+        check(PresetFile::fromJson(R"({"format":"micforge-preset","version":2,"name":"Old","params":{"vcPitch":5,"vcAdded":1}})", old, &err)
+              && old.params.value("vcFormant").toDouble() == 5.0, "old preset: vcFormant follows vcPitch");
+        PresetFile now;
+        check(PresetFile::fromJson(R"({"format":"micforge-preset","version":2,"name":"New","params":{"vcPitch":5,"vcFormant":2}})", now, &err)
+              && now.params.value("vcFormant").toDouble() == 2.0, "new preset: vcFormant kept");
+    }
     return failures ? 1 : 0;
 }

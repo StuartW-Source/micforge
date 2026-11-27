@@ -63,8 +63,17 @@ public:
     void bind(const QVector<Shortcut> &shortcuts) override {
         if (!available()) return;
         m_wanted = shortcuts;
+        if (!m_pendingStep.isEmpty()) { m_rebind = true; return; } // a request is in flight: redo when it answers
         if (m_session.isEmpty()) createSession();
-        else bindNow();
+        else if (!m_bound) bindNow();
+        else {
+            // A session's shortcuts can only be bound once: close it and start a new one with the new list.
+            QDBusConnection::sessionBus().asyncCall(QDBusMessage::createMethodCall(
+                kService, m_session, "org.freedesktop.portal.Session", "Close"));
+            m_session.clear();
+            m_bound = false;
+            createSession();
+        }
     }
 
     void configure() override {
@@ -92,6 +101,7 @@ private slots:
         const QString step = m_pendingStep;
         m_pendingStep.clear();
         if (code != 0) {
+            m_rebind = false;
             m_status = code == 1 ? tr("You cancelled the shortcut setup.") : tr("The desktop couldn't set up shortcuts.");
             changed();
             return;
@@ -101,9 +111,14 @@ private slots:
             if (m_session.isEmpty()) m_session = qvariant_cast<QDBusObjectPath>(results.value("session_handle")).path();
             bindNow();
         } else if (step == "bind") {
+            m_bound = true;
             readTriggers(results.value("shortcuts").value<QDBusArgument>());
             m_status = tr("Ready.");
             changed();
+        }
+        if (m_rebind && m_pendingStep.isEmpty()) {
+            m_rebind = false;
+            if (!sameIds(m_sent, m_wanted)) bind(m_wanted); // the list changed while the desktop was asking
         }
     }
 
@@ -126,7 +141,13 @@ private:
         m_status = tr("Waiting for the desktop…");
         changed();
     }
+    static bool sameIds(const QVector<Shortcut> &a, const QVector<Shortcut> &b) {
+        if (a.size() != b.size()) return false;
+        for (int i = 0; i < a.size(); ++i) if (a[i].id != b[i].id || a[i].description != b[i].description) return false;
+        return true;
+    }
     void bindNow() {
+        m_sent = m_wanted;
         QList<PortalShortcut> list;
         for (const Shortcut &s : m_wanted) {
             QVariantMap props{{"description", s.description}};
@@ -151,8 +172,9 @@ private:
     void changed() { if (onChanged) onChanged(); }
 
     uint m_version = 0;
+    bool m_bound = false, m_rebind = false;
     QString m_session, m_pendingStep, m_status;
-    QVector<Shortcut> m_wanted;
+    QVector<Shortcut> m_wanted, m_sent;
     QMap<QString, QString> m_triggers;
 };
 

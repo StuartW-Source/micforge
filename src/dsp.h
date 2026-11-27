@@ -479,6 +479,7 @@ struct TiltDetector {
 class VoiceChain {
 public:
     explicit VoiceChain(float sampleRate = 48000) : fs(sampleRate), rev(sampleRate) {
+        vc.fs = fs; vc.shifter.setRate(fs); // allocate here, never on the audio thread
         denoise = mf::rnnoise::create(); // nullptr if rnnoise isn't installed: the stage passes audio through
         vadState = mf::rnnoise::create(); // voice detector for the gate when Noise Removal isn't running
     }
@@ -975,7 +976,8 @@ private:
 
         fVc.set(active(VcAdded, VcOn), jump, fs);
         vc.configure(fs, p.get(VcPitch), p.get(VcCharacter), p.get(VcRobot), p.get(VcRobotFreq), p.get(VcRadio),
-                     p.get(VcDrive), p.get(VcWobble), p.get(VcWobbleRate), p.get(VcMix));
+                     p.get(VcDrive), p.get(VcWobble), p.get(VcWobbleRate), p.get(VcMix),
+                     p.get(VcFormant), p.get(VcGrowl), p.get(VcWhisper));
         vcLo.set(Biquad::LowShelf, fs, 700, 0.7071, -p.get(VcCharacter) * 0.5f);
         vcHi.set(Biquad::HighShelf, fs, 1800, 0.7071, p.get(VcCharacter) * 0.5f);
         vcBpHp.set(Biquad::HP, fs, 450, 0.9);

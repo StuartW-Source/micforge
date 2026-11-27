@@ -2,6 +2,26 @@
 
 All notable changes. Format: [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [0.3.0] - 2026-11-27
+
+### Added
+- **New Voice Changer voices**, grouped into Everyday (Child, Woman, Man), Fantasy for tabletop and RPG games
+  (Dragon, Orc, Goblin, Dwarf, Elf, Fairy, Demon, Lich, Golem, Old Wizard, alongside Giant and Monster) and Fun.
+- **Voice size**: moves the formants separately from pitch, so a higher voice sounds like a child or a
+  woman rather than a chipmunk, and a lower one sounds bigger. Uses a new formant shifter (about 37 ms of
+  delay instead of 15 ms; when Voice size equals Pitch the classic shifter is used, as before).
+- **Growl** (rough throat rattle) and **Whisper** (breathy to fully whispered) controls.
+- **Keys for voices**: with system-wide shortcuts on, "Shortcuts for voices" in Settings gives every voice its
+  own shortcut, plus one for your own voice. Choose the keys in the desktop's dialog ("Set keys for
+  voices…"); a voice's key is shown on its tile. Press it again to go back to your own voice.
+
+### Changed
+- **Monster** rebuilt: a lower, bigger voice with growl, instead of a −10 semitone shift through heavy
+  distortion that was 6 dB louder and mostly fuzz.
+- **Drive** adds grit without adding volume: presets with Drive no longer jump 3–8 dB louder.
+- "Character" is now called **Tone** (darker ↔ brighter); it was always a tone tilt.
+- Settings and preset files from earlier versions keep their sound (their formants follow the pitch).
+
 ## [0.2.2] - 2026-11-27
 
 ### Fixed

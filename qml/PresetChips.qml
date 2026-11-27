@@ -7,10 +7,12 @@ Flow {
     property var presets: []
     property color accent: Theme.input
     property bool big: false       // large tiles with an icon (voice changer)
+    property string group: ""      // only presets with this `group` ("" = all)
+    property var keys: ({})        // preset id -> shortcut key description, shown on the tile
     spacing: 8
 
     Repeater {
-        model: root.presets
+        model: root.group === "" ? root.presets : root.presets.filter((p) => p.group === root.group)
         Rectangle {
             id: chip
             readonly property bool current: Theme.matches(controller.params, modelData.values)
@@ -40,6 +42,22 @@ Flow {
                     font.weight: Font.DemiBold
                 }
             }
+            Rectangle {
+                readonly property string key: (modelData.id !== undefined && root.keys[modelData.id]) || ""
+                visible: key !== ""
+                anchors.top: parent.top; anchors.right: parent.right; anchors.margins: 4
+                width: keyText.implicitWidth + 8; height: keyText.implicitHeight + 2
+                radius: Theme.radiusSm - 2
+                color: Theme.well
+                border.color: Theme.border
+                Text {
+                    id: keyText
+                    anchors.centerIn: parent
+                    text: parent.key
+                    color: Theme.textDim
+                    font.pixelSize: Theme.fsCaption
+                }
+            }
             MouseArea {
                 id: m
                 anchors.fill: parent
@@ -48,7 +66,10 @@ Flow {
                 onClicked: Theme.applyPreset(controller, modelData.values)
             }
             HoverHandler { id: hh }
-            ToolTipLite { visible: hh.hovered && (modelData.tip || "") !== ""; text: modelData.tip || "" }
+            ToolTipLite {
+                visible: hh.hovered && (modelData.tip || "") !== ""
+                text: (modelData.tip || "") + ((modelData.id !== undefined && root.keys[modelData.id]) ? "\nShortcut: " + root.keys[modelData.id] : "")
+            }
         }
     }
 }

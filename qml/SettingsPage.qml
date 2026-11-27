@@ -48,7 +48,7 @@ Flickable {
         Card {
             Layout.fillWidth: true
             title: "Keyboard shortcuts in any app"
-            subtitle: "Mute or push-to-talk while you're in a game or another window. Your desktop asks you to confirm the keys the first time."
+            subtitle: "Mute, push-to-talk or switch voices while you're in a game or another window. Your desktop asks you to confirm the keys the first time."
             SettingRow {
                 title: "Use system-wide shortcuts"
                 sub: controller.shortcutsAvailable ? "Status: " + controller.shortcutsStatus : controller.shortcutsStatus
@@ -72,6 +72,13 @@ Flickable {
                 sub: "Your mic stays muted except while you hold the push-to-talk key. MicForge starts muted while this is on."
                 checked: controller.pushToTalk
                 onToggled: (on) => controller.pushToTalk = on
+            }
+            SettingRow {
+                visible: controller.shortcutsEnabled
+                title: "Shortcuts for voices"
+                sub: "A key for each Voice Changer voice (press it again for your own voice). Your desktop lists them so you can choose keys for the ones you want."
+                checked: controller.voiceShortcutsEnabled
+                onToggled: (on) => controller.voiceShortcutsEnabled = on
             }
             PillButton {
                 visible: controller.shortcutsEnabled

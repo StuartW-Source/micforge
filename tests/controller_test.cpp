@@ -4,6 +4,7 @@
 #include "controller.h"
 #include "params.h"
 
+#include <QSettings>
 #include <QFile>
 #include <QGuiApplication>
 #include <QStandardPaths>
@@ -104,6 +105,7 @@ int main(int argc, char **argv) {
     // ---- global shortcuts and push-to-talk (fake desktop portal)
     check(fake && fake->binds == 0, "shortcuts: nothing is bound until switched on (no desktop dialog)");
     c.setShortcutsEnabled(true);
+    QCoreApplication::processEvents(); // binding waits for the event loop, so start-up changes make one request
     check(fake->binds == 1 && fake->ids.contains("mute") && fake->ids.contains("push-to-talk"), "shortcuts: mute and push-to-talk requested");
     check(c.muteKey() == "Ctrl+Alt+M", "shortcuts: the desktop's key is shown");
     fake->onActivated("mute");
@@ -116,6 +118,25 @@ int main(int argc, char **argv) {
     check(!c.muted(), "push-to-talk: key held -> live");
     fake->onDeactivated("push-to-talk");
     check(c.muted(), "push-to-talk: key released -> silent");
+    // ---- voice shortcuts
+    c.setVoiceList({QVariantMap{{"id", "dragon"}, {"name", "Dragon"}}, QVariantMap{{"id", "orc"}, {"name", "Orc"}}});
+    QCoreApplication::processEvents();
+    check(!fake->ids.contains("voice-dragon"), "voice shortcuts: not requested until switched on");
+    const int before = fake->binds;
+    c.setVoiceShortcutsEnabled(true);
+    c.setVoiceList({QVariantMap{{"id", "dragon"}, {"name", "Dragon"}}, QVariantMap{{"id", "orc"}, {"name", "Orc"}}});
+    QCoreApplication::processEvents();
+    check(fake->binds == before + 1 && fake->ids.contains("voice-dragon") && fake->ids.contains("voice-orc")
+          && fake->ids.contains("voice-off") && fake->ids.contains("mute"), "voice shortcuts: one request with every voice, own voice and mute");
+    QString pressed;
+    QObject::connect(&c, &Controller::voiceShortcut, [&](const QString &id) { pressed = id; });
+    fake->onActivated("voice-orc");
+    check(pressed == "orc", "voice shortcuts: pressing a voice's key reaches the UI");
+    c.setVoiceShortcutsEnabled(false);
+    QCoreApplication::processEvents();
+    check(!fake->ids.contains("voice-orc") && fake->ids.contains("mute"), "voice shortcuts: switched off -> rebound without them");
+    check(QSettings().value("shortcuts/voices").toBool() == false, "voice shortcuts: the choice is saved");
+
     c.setShortcutsEnabled(false);
     check(!c.muted(), "turning shortcuts off never leaves you stuck muted");
     fake->onActivated("push-to-talk");

@@ -81,6 +81,11 @@ Controller::Controller(const StartupInfo &startup, QObject *parent)
         m_params.insert(kParams[i].key, v);
         m_core.params.set(i, float(v));
     }
+    // Before 0.3.0 the Voice Changer's formants always followed its pitch; keep older settings sounding the same.
+    if (!m_startup.safeMode && !s.contains("params/vcFormant")) {
+        m_params.insert("vcFormant", m_params.value("vcPitch"));
+        m_core.params.set(VcFormant, float(m_params.value("vcPitch").toDouble()));
+    }
     m_core.params.set(Bypass, 0); // never start bypassed or muted
     m_core.params.set(Mute, 0);
     m_params.insert("mute", 0);
@@ -155,14 +160,16 @@ Controller::Controller(const StartupInfo &startup, QObject *parent)
     m_pushToTalk = s.value("shortcuts/pushToTalk", false).toBool();
     m_shortcuts = createGlobalShortcuts();
     m_shortcuts->onChanged = [this] { emit shortcutsChanged(); };
+    m_voiceShortcutsEnabled = s.value("shortcuts/voices", false).toBool();
     m_shortcuts->onActivated = [this](const QString &id) {
-        if (id == "mute") toggleMute();
+        if (id.startsWith("voice-")) emit voiceShortcut(id.mid(6));
+        else if (id == "mute") toggleMute();
         else if (id == "push-to-talk" && m_pushToTalk) setMuted(false);
     };
     m_shortcuts->onDeactivated = [this](const QString &id) {
         if (id == "push-to-talk" && m_pushToTalk) setMuted(true);
     };
-    if (m_shortcutsEnabled && !m_startup.safeMode) bindShortcuts();
+    if (m_shortcutsEnabled && !m_startup.safeMode) scheduleBind(); // after the UI has listed its voices
     if (m_pushToTalk && m_shortcutsEnabled) setMuted(true); // push-to-talk: silent until the key is held
 
     // From here on, every settings change can be undone.
@@ -429,15 +436,58 @@ void Controller::dismissProfileNotice() {
 // ---------------------------------------------------------------- global shortcuts
 
 void Controller::bindShortcuts() {
-    m_shortcuts->bind({{"mute", tr("Mute or unmute MicForge"), "CTRL+ALT+M"},
-                       {"push-to-talk", tr("Push to talk (hold to speak through MicForge)"), ""}});
+    QVector<IGlobalShortcuts::Shortcut> list{{"mute", tr("Mute or unmute MicForge"), "CTRL+ALT+M"},
+                                             {"push-to-talk", tr("Push to talk (hold to speak through MicForge)"), ""}};
+    if (m_voiceShortcutsEnabled) {
+        list.push_back({"voice-off", tr("Voice Changer: back to your own voice"), ""});
+        for (const QVariant &v : m_voiceList) {
+            const QVariantMap m = v.toMap();
+            const QString id = m.value("id").toString();
+            if (id.isEmpty() || id == "off") continue;
+            list.push_back({"voice-" + id, tr("Voice Changer: %1 (press again for your own voice)").arg(m.value("name").toString()), ""});
+        }
+    }
+    m_shortcuts->bind(list);
+}
+
+// Several changes in a row (start-up, the UI listing its voices) lead to one request to the desktop.
+void Controller::scheduleBind() {
+    if (m_bindScheduled) return;
+    m_bindScheduled = true;
+    QTimer::singleShot(0, this, [this] {
+        m_bindScheduled = false;
+        if (m_shortcutsEnabled && !m_startup.safeMode) bindShortcuts();
+    });
+}
+
+void Controller::setVoiceList(const QVariantList &voices) {
+    if (voices == m_voiceList) return;
+    m_voiceList = voices;
+    if (m_voiceShortcutsEnabled) scheduleBind();
+}
+
+void Controller::setVoiceShortcutsEnabled(bool on) {
+    if (on == m_voiceShortcutsEnabled) return;
+    m_voiceShortcutsEnabled = on;
+    if (!m_startup.safeMode) QSettings().setValue("shortcuts/voices", on);
+    scheduleBind();
+    emit shortcutsChanged();
+}
+
+QVariantMap Controller::voiceKeys() const {
+    QVariantMap out;
+    if (!m_shortcuts || !m_voiceShortcutsEnabled) return out;
+    const auto t = m_shortcuts->triggers();
+    for (auto it = t.begin(); it != t.end(); ++it)
+        if (it.key().startsWith("voice-") && !it.value().isEmpty()) out[it.key().mid(6)] = it.value();
+    return out;
 }
 
 void Controller::setShortcutsEnabled(bool on) {
     if (on == m_shortcutsEnabled) return;
     m_shortcutsEnabled = on;
     if (!m_startup.safeMode) QSettings().setValue("shortcuts/enabled", on);
-    if (on) bindShortcuts();
+    if (on) scheduleBind();
     else if (m_pushToTalk) setMuted(false); // shortcuts off: push-to-talk can't work, so don't stay muted
     emit shortcutsChanged();
 }

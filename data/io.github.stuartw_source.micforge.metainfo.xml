@@ -30,6 +30,11 @@
   </categories>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.3.0" date="2026-11-27">
+      <description>
+        <p>New Voice Changer voices for everyday use (child, woman, man) and for fantasy games (dragon, orc, goblin, dwarf, elf, fairy, demon, lich, golem, old wizard), a rebuilt Monster, new Voice size, Growl and Whisper controls, and optional system-wide keys to switch voices.</p>
+      </description>
+    </release>
     <release version="0.2.2" date="2026-11-27">
       <description>
         <p>Fixes MicForge not noticing when you change its system-wide shortcuts in the desktop settings.</p>
